@@ -121,42 +121,153 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.pin()
             logger.info(f"Сообщение закреплено в группе {chat_id}.")
             last_pinned_time = current_time  # Обновляем время последнего закрепления
+
+            # Отправляем сообщение в целевую группу, если это первое закрепление
+            if chat_id != TARGET_GROUP_ID:
+                # Удаляем маркер "зч" или "звезда" и пробел
+                if text.lower().startswith("зч"):
+                    new_text = text[len("зч"):].strip()
+                elif text.lower().startswith("звезда"):
+                    new_text = text[len("звезда"):].strip()
+                else:
+                    new_text = text.replace("🌟", "").strip()  # Убираем смайлик 🌟
+
+                # Пересылаем сообщение в целевую группу
+                try:
+                    forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
+                    logger.info(f"Сообщение переслано в целевую группу {TARGET_GROUP_ID}.")
+                    await forwarded_message.pin()
+                    logger.info(f"Пересланное сообщение закреплено в целевой группе {TARGET_GROUP_ID}.")
+                except Exception as e:
+                    logger.error(f"Ошибка при пересылке сообщения в целевую группу {TARGET_GROUP_ID}: {e}")
         except Exception as e:
             logger.error(f"Ошибка при закреплении сообщения в группе {chat_id}: {e}")
-
-        # Если сообщение пришло из другой группы (не целевой), пересылаем его в целевую группу
-        if chat_id != TARGET_GROUP_ID:
-            # Проверяем права администратора в целевой группе
-            if not await check_admin_rights(context, TARGET_GROUP_ID):
-                logger.warning("Бот не имеет прав администратора в целевой группе.")
-                return
-
-            # Удаляем маркер "зч" или "звезда" и пробел
-            if text.lower().startswith("зч"):
-                new_text = text[len("зч"):].strip()
-            elif text.lower().startswith("звезда"):
-                new_text = text[len("звезда"):].strip()
-            else:
-                new_text = text.replace("🌟", "").strip()  # Убираем смайлик 🌟
-
-            # Пересылаем сообщение в целевую группу
-            try:
-                forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
-                logger.info(f"Сообщение переслано в целевую группу {TARGET_GROUP_ID}.")
-            except Exception as e:
-                logger.error(f"Ошибка при пересылке сообщения в целевую группу {TARGET_GROUP_ID}: {e}")
-                return
-
-            # Закрепляем пересланное сообщение в целевой группе
-            try:
-                await forwarded_message.pin()
-                logger.info(f"Пересланное сообщение закреплено в целевой группе {TARGET_GROUP_ID}.")
-            except Exception as e:
-                logger.error(f"Ошибка при закреплении пересланного сообщения: {e}")
 
     except Exception as e:
         logger.error(f"Ошибка при обработке сообщения: {e}")
 
+# Обработчик команды /ban
+async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    chat_id = update.message.chat.id
+
+    # Проверяем права пользователя
+    if not await is_admin_or_allowed_user(update, context):
+        await update.message.reply_text("У вас нет прав для выполнения этой команды.")
+        return
+
+    # Получаем ID пользователя, которого нужно забанить
+    target_user = None
+    reply_to_message = update.message.reply_to_message
+
+    # Если команда отправлена в ответ на сообщение
+    if reply_to_message:
+        target_user = reply_to_message.from_user
+    else:
+        # Если команда содержит упоминание пользователя
+        if context.args and context.args[0].startswith("@"):
+            username = context.args[0][1:]  # Убираем "@" из имени пользователя
+            try:
+                chat_members = await context.bot.get_chat_member(chat_id=chat_id, user_id=user.id)
+                for member in chat_members:
+                    if member.user.username.lower() == username.lower():
+                        target_user = member.user
+                        break
+            except Exception as e:
+                logger.error(f"Ошибка при поиске пользователя {username}: {e}")
+                await update.message.reply_text(f"Не удалось найти пользователя @{username}.")
+                return
+
+    # Если целевой пользователь не найден
+    if not target_user:
+        await update.message.reply_text("Пожалуйста, укажите пользователя через упоминание или отправьте команду в ответ на его сообщение.")
+        return
+
+    # Баним пользователя
+    try:
+        await context.bot.ban_chat_member(chat_id=chat_id, user_id=target_user.id)
+        logger.info(f"Пользователь {target_user.username} забанен в чате {chat_id} пользователем {user.username}.")
+        await update.message.reply_text(f"Пользователь @{target_user.username} был забанен.")
+    except Exception as e:
+        logger.error(f"Ошибка при бане пользователя {target_user.id} в чате {chat_id}: {e}")
+        await update.message.reply_text("Не удалось забанить пользователя. Проверьте права бота.")
+
+    # Удаляем команду из чата
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.error(f"Ошибка при удалении команды: {e}")
+
+# Обработчик команды /mute
+async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    chat_id = update.message.chat.id
+
+    # Проверяем права пользователя
+    if not await is_admin_or_allowed_user(update, context):
+        await update.message.reply_text("У вас нет прав для выполнения этой команды.")
+        return
+
+    # Получаем ID пользователя, которого нужно замутить
+    target_user = None
+    reply_to_message = update.message.reply_to_message
+
+    # Если команда отправлена в ответ на сообщение
+    if reply_to_message:
+        target_user = reply_to_message.from_user
+    else:
+        # Если команда содержит упоминание пользователя
+        if context.args and context.args[0].startswith("@"):
+            username = context.args[0][1:]  # Убираем "@" из имени пользователя
+            try:
+                chat_members = await context.bot.get_chat_member(chat_id=chat_id, user_id=user.id)
+                for member in chat_members:
+                    if member.user.username.lower() == username.lower():
+                        target_user = member.user
+                        break
+            except Exception as e:
+                logger.error(f"Ошибка при поиске пользователя {username}: {e}")
+                await update.message.reply_text(f"Не удалось найти пользователя @{username}.")
+                return
+
+    # Если целевой пользователь не найден
+    if not target_user:
+        await update.message.reply_text("Пожалуйста, укажите пользователя через упоминание или отправьте команду в ответ на его сообщение.")
+        return
+
+    # Получаем время мута из аргументов команды
+    mute_duration = None
+    if len(context.args) >= 1:
+        try:
+            # Если первый аргумент — это время (число)
+            mute_duration = int(context.args[-1]) * 60  # Преобразуем минуты в секунды
+        except ValueError:
+            await update.message.reply_text("Неверный формат времени. Укажите время в минутах.")
+            return
+
+    if mute_duration is None:
+        await update.message.reply_text("Пожалуйста, укажите время мута в минутах.")
+        return
+
+    # Мутим пользователя
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=target_user.id,
+            permissions={"can_send_messages": False},
+            until_date=time.time() + mute_duration
+        )
+        logger.info(f"Пользователь {target_user.username} замучен в чате {chat_id} на {mute_duration // 60} минут пользователем {user.username}.")
+        await update.message.reply_text(f"Пользователь @{target_user.username} замучен на {mute_duration // 60} минут.")
+    except Exception as e:
+        logger.error(f"Ошибка при муте пользователя {target_user.id} в чате {chat_id}: {e}")
+        await update.message.reply_text("Не удалось замутить пользователя. Проверьте права бота.")
+
+    # Удаляем команду из чата
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.error(f"Ошибка при удалении команды: {e}")
 
 # Основная функция
 def main():
@@ -165,6 +276,8 @@ def main():
 
     # Регистрируем обработчики
     application.add_handler(CommandHandler("timer", reset_pin_timer))
+    application.add_handler(CommandHandler("ban", ban_user))
+    application.add_handler(CommandHandler("mute", mute_user))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Запускаем бота
