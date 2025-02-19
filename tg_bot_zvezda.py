@@ -3,6 +3,9 @@ from telegram.ext import Application, MessageHandler, filters, CommandHandler, C
 import logging
 import time
 
+# Глобальная переменная для хранения username последнего пользователя, который закрепил звезду (по группам)
+last_user_username = {}  # {chat_id: username}
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -13,17 +16,25 @@ logger = logging.getLogger(__name__)
 # Токен вашего бота
 BOT_TOKEN = '8095859951:AAFGrYc5flFZk2EU8NNnsqpVWRJTGn009D4'
 
-# ID целевой группы
-TARGET_GROUP_ID = -1002437528572  # Замените на реальный ID вашей целевой группы
+# ID целевой группы (если нужно пересылать сообщения)
+TARGET_GROUP_ID = -1002437528572
 
-# Время в секундах (60 минут = 3600 секунд)
-PINNED_DURATION = 3600
+# Время в секундах (45 минут = 2700 секунд)
+PINNED_DURATION = 2700  # Изменено на 45 минут
 
-# Глобальная переменная для хранения времени последнего закрепления
-last_pinned_time = 0
+# Глобальная переменная для хранения времени последнего закрепления (по группам)
+last_pinned_times = {}  # {chat_id: timestamp}
 
 # Разрешенный пользователь для сброса таймера
 ALLOWED_USER = "@Muzikant1429"
+
+# Список запрещенных слов (антимат)
+BANNED_WORDS = ["бля", "хуй", "пизд", "наху", "гандон", "пидр", "пидорас", "шалав", "шлюх", "мразь"]
+
+# Лимиты для антиспама
+SPAM_LIMIT = 5  # Максимальное количество сообщений
+SPAM_INTERVAL = 10  # Интервал в секундах
+user_message_counts = {}  # {user_id: [timestamp1, timestamp2, ...]}
 
 # Функция для проверки прав администратора
 async def check_admin_rights(context, chat_id):
@@ -47,32 +58,16 @@ async def is_admin_or_allowed_user(update: Update, context: ContextTypes.DEFAULT
         logger.error(f"Ошибка при проверке прав пользователя {user.id} в чате {chat_id}: {e}")
         return False
 
-# Обработчик команды /reset_pin_timer
-async def reset_pin_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global last_pinned_time
-    user = update.message.from_user
-    chat_id = update.message.chat.id
-
-    # Проверяем права пользователя
-    if not await is_admin_or_allowed_user(update, context):
-        await update.message.reply_text("У вас нет прав для выполнения этой команды.")
-        return
-
-    # Сбрасываем таймер
-    last_pinned_time = 0
-    logger.info(f"Таймер закрепа сброшен пользователем {user.username} в чате {chat_id}.")
-    await update.message.reply_text("Таймер закрепа успешно сброшен.")
-
-    # Удаляем команду из чата
+# Функция для удаления системных сообщений через указанное время
+async def delete_system_message(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
     try:
-        await update.message.delete()
+        await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data)
     except Exception as e:
-        logger.error(f"Ошибка при удалении команды: {e}")
+        logger.error(f"Ошибка при удалении системного сообщения: {e}")
 
 # Обработчик новых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global last_pinned_time
-
     try:
         message = update.message
         if not message:
@@ -81,14 +76,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         chat_id = message.chat.id
         text = message.text
-        logger.info(f"Получено новое сообщение в чате {chat_id}: {text}")
+        user = message.from_user
+        current_time = time.time()
+
+        logger.info(f"Получено новое сообщение в чате {chat_id} от пользователя {user.username}: {text}")
+
+        # Антиспам
+        if user.id not in user_message_counts:
+            user_message_counts[user.id] = []
+        user_message_counts[user.id] = [t for t in user_message_counts[user.id] if current_time - t < SPAM_INTERVAL]
+        user_message_counts[user.id].append(current_time)
+
+        if len(user_message_counts[user.id]) > SPAM_LIMIT:
+            await message.delete()
+            warning_message = await update.message.reply_text(f"{user.username}, пожалуйста, не спамьте!")
+            logger.info(f"Спам обнаружен от пользователя {user.username} в чате {chat_id}.")
+            # Удаляем предупреждение через 3 минуты
+            context.job_queue.run_once(delete_system_message, 180, data=warning_message.message_id, chat_id=chat_id)
+            return
+
+        # Антимат
+        if any(word in text.lower() for word in BANNED_WORDS):
+            await message.delete()
+            warning_message = await context.bot.send_message(
+                chat_id=chat_id,
+                text="Использование нецензурных выражений недопустимо! Пожалуйста, соблюдайте правила общения."
+            )
+            logger.info(f"Обнаружен мат в чате {chat_id}.")
+            # Удаляем предупреждение через 1 минуту
+            context.job_queue.run_once(delete_system_message, 60, data=warning_message.message_id, chat_id=chat_id)
+            return
 
         # Проверяем, что сообщение пришло из группы или супергруппы
         if message.chat.type not in ['group', 'supergroup']:
             logger.info("Сообщение не из группы. Игнорируем.")
             return
 
-        # Проверяем, начинается ли сообщение с "звезда" (в любом регистре), "зч" (в любом регистре) или содержит 🌟
+        # Проверяем, начинается ли сообщение с "звезда", "зч" или содержит 🌟
         if not text or (
             not text.lower().startswith("звезда") and
             not text.lower().startswith("зч") and
@@ -97,11 +121,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info("Сообщение не соответствует условиям. Игнорируем.")
             return
 
-        # Если прошло менее 100 минут с момента последнего закрепления
-        current_time = time.time()
+        # Если прошло менее 45 минут с момента последнего закрепления
+        last_pinned_time = last_pinned_times.get(chat_id, 0)
         if current_time - last_pinned_time < PINNED_DURATION:
             logger.info(f"Прошло {current_time - last_pinned_time} секунд. Удаляем сообщение.")
             await message.delete()
+
+            # Проверяем, прошло ли менее 3 минут с момента последнего закрепа
+            if current_time - last_pinned_time < 180:
+                last_user = last_user_username.get(chat_id, "")  # Получаем username последнего пользователя
+                thanks_message = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"Спасибо за вашу бдительность! Звезда часа уже замечена пользователем "
+                        f"{'@' + last_user if last_user else 'до Вас'} и закреплена в группе. "
+                        f"Надеюсь, в следующий раз именно Вы станете нашей 🌟!!!"
+                    )
+                )
+                logger.info(f"Отправлено сообщение с благодарностью в чате {chat_id}.")
+                # Удаляем сообщение с благодарностью через 3 минуты
+                context.job_queue.run_once(delete_system_message, 180, data=thanks_message.message_id, chat_id=chat_id)
             return
 
         # Проверяем права администратора в текущей группе
@@ -120,10 +159,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await message.pin()
             logger.info(f"Сообщение закреплено в группе {chat_id}.")
-            last_pinned_time = current_time  # Обновляем время последнего закрепления
+            last_pinned_times[chat_id] = current_time  # Обновляем время последнего закрепления
+            last_user_username[chat_id] = user.username if user.username else None  # Сохраняем username
 
-            # Отправляем сообщение в целевую группу, если это первое закрепление
+            # Пересылаем сообщение в целевую группу
             if chat_id != TARGET_GROUP_ID:
+                if not await check_admin_rights(context, TARGET_GROUP_ID):
+                    logger.warning("Бот не имеет прав администратора в целевой группе.")
+                    return
+
                 # Удаляем маркер "зч" или "звезда" и пробел
                 if text.lower().startswith("зч"):
                     new_text = text[len("зч"):].strip()
@@ -145,6 +189,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Ошибка при обработке сообщения: {e}")
+
+# Обработчик команды /reset_pin_timer
+async def reset_pin_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat.id
+    user = update.message.from_user
+
+    # Проверяем права пользователя
+    if not await is_admin_or_allowed_user(update, context):
+        await update.message.reply_text("У вас нет прав для выполнения этой команды.")
+        return
+
+    # Сбрасываем таймер
+    last_pinned_times[chat_id] = 0
+    logger.info(f"Таймер закрепа сброшен пользователем {user.username} в чате {chat_id}.")
+    success_message = await update.message.reply_text("Таймер закрепа успешно сброшен.")
+
+    # Удаляем команду и уведомление через 3 минуты
+    try:
+        await update.message.delete()
+        context.job_queue.run_once(delete_system_message, 180, data=success_message.message_id, chat_id=chat_id)
+    except Exception as e:
+        logger.error(f"Ошибка при удалении команды: {e}")
 
 # Обработчик команды /ban
 async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -283,7 +349,6 @@ def main():
     # Запускаем бота
     application.run_polling()
     logger.info("Бот запущен. Ожидание сообщений...")
-
 
 if __name__ == '__main__':
     main()
