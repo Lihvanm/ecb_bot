@@ -2,9 +2,7 @@ from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, CommandHandler, ContextTypes
 import logging
 import time
-
-# Глобальная переменная для хранения username последнего пользователя, который закрепил звезду (по группам)
-last_user_username = {}  # {chat_id: username}
+import re
 
 # Настройка логирования
 logging.basicConfig(
@@ -22,8 +20,11 @@ TARGET_GROUP_ID = -1002437528572
 # Время в секундах (45 минут = 2700 секунд)
 PINNED_DURATION = 2700  # Изменено на 45 минут
 
-# Глобальная переменная для хранения времени последнего закрепления (по группам)
+# Глобальные переменные
 last_pinned_times = {}  # {chat_id: timestamp}
+last_user_username = {}  # {chat_id: username}
+last_zch_times = {}  # {chat_id: timestamp}
+last_thanks_times = {}  # {chat_id: timestamp}
 
 # Разрешенный пользователь для сброса таймера
 ALLOWED_USER = "@Muzikant1429"
@@ -31,10 +32,27 @@ ALLOWED_USER = "@Muzikant1429"
 # Список запрещенных слов (антимат)
 BANNED_WORDS = ["бля", "хуй", "пизд", "наху", "гандон", "пидр", "пидорас", "шалав", "шлюх", "мразь"]
 
+# Ключевые слова для мессенджеров и ссылок
+MESSENGER_KEYWORDS = [
+    "t.me", "telegram", "whatsapp", "viber", "discord", "vk.com", "instagram",
+    "facebook", "twitter", "youtube", "http", "www", ".com", ".ru"
+]
+
 # Лимиты для антиспама
-SPAM_LIMIT = 5  # Максимальное количество сообщений
-SPAM_INTERVAL = 10  # Интервал в секундах
-user_message_counts = {}  # {user_id: [timestamp1, timestamp2, ...]}
+SPAM_LIMIT = 4  # Максимальное количество сообщений
+SPAM_INTERVAL = 30  # Интервал в секундах
+MUTE_DURATION = 900  # Время мута в секундах (15 минут)
+
+#функция удаления сообщений пользователя
+async def delete_all_user_messages(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    if user_id in user_message_history:
+        for chat_id, message_id in user_message_history[user_id]:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+                logger.info(f"Удалено сообщение {message_id} пользователя {user_id} в чате {chat_id}.")
+            except Exception as e:
+                logger.error(f"Ошибка при удалении сообщения {message_id} пользователя {user_id}: {e}")
+        user_message_history[user_id].clear()  # Очищаем историю после удаления
 
 # Функция для проверки прав администратора
 async def check_admin_rights(context, chat_id):
@@ -66,6 +84,62 @@ async def delete_system_message(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при удалении системного сообщения: {e}")
 
+# Функция для открепления последнего закрепленного сообщения
+async def unpin_last_message(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    chat_id = job.chat_id
+    try:
+        await context.bot.unpin_chat_message(chat_id=chat_id)
+        logger.info(f"Откреплено последнее закрепленное сообщение в группе {chat_id}.")
+    except Exception as e:
+        logger.error(f"Ошибка при откреплении сообщения в группе {chat_id}: {e}")
+
+# Обработчик команды /reset_pin_timer
+async def reset_pin_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat.id
+    user = update.message.from_user
+
+    # Проверяем права пользователя
+    if not await is_admin_or_allowed_user(update, context):
+        await update.message.reply_text("У вас нет прав для выполнения этой команды.")
+        return
+
+    # Сбрасываем таймер
+    last_pinned_times[chat_id] = 0
+    logger.info(f"Таймер закрепа сброшен пользователем {user.username} в чате {chat_id}.")
+
+    # Открепляем последнее закрепленное сообщение
+    try:
+        await context.bot.unpin_chat_message(chat_id=chat_id)
+        logger.info(f"Откреплено последнее закрепленное сообщение в группе {chat_id}.")
+    except Exception as e:
+        logger.error(f"Ошибка при откреплении сообщения в группе {chat_id}: {e}")
+
+    success_message = await update.message.reply_text("Таймер закрепа успешно сброшен.")
+
+    # Удаляем команду и уведомление через 10 СЕК
+    try:
+        await update.message.delete()
+        context.job_queue.run_once(delete_system_message, 10, data=success_message.message_id, chat_id=chat_id)
+    except Exception as e:
+        logger.error(f"Ошибка при удалении команды: {e}")
+
+# Глобальные переменные
+user_message_history = {}  # {user_id: [(chat_id, message_id), ...]}
+user_message_counts = {}  # {user_id: [timestamp1, timestamp2, ...]}
+user_mute_times = {}  # {user_id: mute_end_time}
+
+# Функция для удаления всех сообщений пользователя
+async def delete_all_user_messages(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    if user_id in user_message_history:
+        for chat_id, message_id in user_message_history[user_id]:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+                logger.info(f"Удалено сообщение {message_id} пользователя {user_id} в чате {chat_id}.")
+            except Exception as e:
+                logger.error(f"Ошибка при удалении сообщения {message_id} пользователя {user_id}: {e}")
+        user_message_history[user_id].clear()  # Очищаем историю после удаления
+
 # Обработчик новых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -81,18 +155,63 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         logger.info(f"Получено новое сообщение в чате {chat_id} от пользователя {user.username}: {text}")
 
-        # Антиспам
+        # Проверка, находится ли пользователь под мутом
+        if user.id in user_mute_times:
+            if current_time < user_mute_times[user.id]:  # Если время мута ещё не истекло
+                logger.info(f"Пользователь {user.username} находится под мутом. Удаляем сообщение.")
+                await message.delete()
+                return
+            else:
+                # Если время мута истекло, удаляем пользователя из списка
+                del user_mute_times[user.id]
+
+        # Сохраняем сообщение в историю
+        if user.id not in user_message_history:
+            user_message_history[user.id] = []
+        user_message_history[user.id].append((chat_id, message.message_id))
+
+        # Проверка на спам
         if user.id not in user_message_counts:
             user_message_counts[user.id] = []
         user_message_counts[user.id] = [t for t in user_message_counts[user.id] if current_time - t < SPAM_INTERVAL]
         user_message_counts[user.id].append(current_time)
 
         if len(user_message_counts[user.id]) > SPAM_LIMIT:
-            await message.delete()
-            warning_message = await update.message.reply_text(f"{user.username}, пожалуйста, не спамьте!")
-            logger.info(f"Спам обнаружен от пользователя {user.username} в чате {chat_id}.")
-            # Удаляем предупреждение через 3 минуты
-            context.job_queue.run_once(delete_system_message, 180, data=warning_message.message_id, chat_id=chat_id)
+            # Удаляем все сообщения пользователя
+            await delete_all_user_messages(context, user.id)
+
+            # Проверяем права администратора для мута
+            mute_status = False
+            try:
+                await context.bot.restrict_chat_member(
+                    chat_id=chat_id,
+                    user_id=user.id,
+                    permissions={"can_send_messages": False},
+                    until_date=current_time + MUTE_DURATION
+                )
+                mute_status = True
+                logger.info(f"Пользователь {user.username or 'анонимный'} замучен на 15 минут в чате {chat_id}.")
+            except Exception as e:
+                logger.error(f"Ошибка при муте пользователя {user.id} в чате {chat_id}: {e}")
+
+            # Если мут не удался, добавляем пользователя в список для удаления сообщений
+            if not mute_status:
+                user_mute_times[user.id] = current_time + MUTE_DURATION
+                logger.info(f"Пользователь {user.username or 'анонимный'} добавлен в список для удаления сообщений на 15 минут.")
+
+            # Отправляем предупреждение
+            warning_text = (
+                f"{user.username or 'Уважаемый спамер'}, в связи с тем что вы захламляете группу, "
+                f"все ваши сообщения были удалены. Пожалуйста, соблюдайте правила общения."
+            )
+            warning_message = await context.bot.send_message(chat_id=chat_id, text=warning_text)
+            logger.info(f"Отправлено предупреждение спамеру {user.username or 'анонимному'} в чате {chat_id}.")
+
+            # Удаляем предупреждение через 10 секунд
+            context.job_queue.run_once(delete_system_message, 10, data=warning_message.message_id, chat_id=chat_id)
+
+            # Очищаем счетчик сообщений спамера
+            user_message_counts[user.id].clear()
             return
 
         # Антимат
@@ -100,10 +219,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.delete()
             warning_message = await context.bot.send_message(
                 chat_id=chat_id,
-                text="Использование нецензурных выражений недопустимо! Пожалуйста, соблюдайте правила общения."
+                text=f"{user.username if user.username else 'Уважаемый'}, использование нецензурных выражений недопустимо! Пожалуйста, соблюдайте правила общения."
             )
-            logger.info(f"Обнаружен мат в чате {chat_id}.")
-            # Удаляем предупреждение через 1 минуту
+            logger.info(f"Обнаружен мат от пользователя {user.username if user.username else 'анонимного'} в чате {chat_id}.")
+            context.job_queue.run_once(delete_system_message, 60, data=warning_message.message_id, chat_id=chat_id)
+            return
+
+        # Антимат
+        if any(word in text.lower() for word in BANNED_WORDS):
+            await message.delete()
+            warning_message = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"{user.username if user.username else 'Уважаемый'}, использование нецензурных выражений недопустимо! Пожалуйста, соблюдайте правила общения."
+            )
+            logger.info(f"Обнаружен мат от пользователя {user.username if user.username else 'анонимного'} в чате {chat_id}.")
+            context.job_queue.run_once(delete_system_message, 60, data=warning_message.message_id, chat_id=chat_id)
+            return
+
+        # Антифлуд для ссылок и мессенджеров
+        if any(re.search(rf"\b{re.escape(keyword)}\b", text.lower()) for keyword in MESSENGER_KEYWORDS):
+            await message.delete()
+            warning_message = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"{user.username if user.username else 'Уважаемый'}, отправка ссылок и упоминание мессенджеров недопустимы! Пожалуйста, соблюдайте правила общения."
+            )
+            logger.info(f"Обнаружена ссылка или мессенджер от пользователя {user.username if user.username else 'анонимного'} в чате {chat_id}.")
             context.job_queue.run_once(delete_system_message, 60, data=warning_message.message_id, chat_id=chat_id)
             return
 
@@ -129,6 +269,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Проверяем, прошло ли менее 3 минут с момента последнего закрепа
             if current_time - last_pinned_time < 180:
+                # Проверяем, когда было последнее сообщение с "ЗЧ"
+                last_zch_time = last_zch_times.get(chat_id, 0)
+                if current_time - last_zch_time < 180:
+                    logger.info("Повторное сообщение с 'ЗЧ' игнорируется.")
+                    return
+                
+                # Проверяем, когда была отправлена последняя благодарность
+                last_thanks_time = last_thanks_times.get(chat_id, 0)
+                if current_time - last_thanks_time < 180:
+                    logger.info("Благодарность ещё не может быть отправлена.")
+                    return
+
+                # Отправляем сообщение с благодарностью
                 last_user = last_user_username.get(chat_id, "")  # Получаем username последнего пользователя
                 thanks_message = await context.bot.send_message(
                     chat_id=chat_id,
@@ -139,8 +292,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 )
                 logger.info(f"Отправлено сообщение с благодарностью в чате {chat_id}.")
-                # Удаляем сообщение с благодарностью через 3 минуты
                 context.job_queue.run_once(delete_system_message, 180, data=thanks_message.message_id, chat_id=chat_id)
+                
+                # Обновляем время последнего сообщения с "ЗЧ" и времени благодарности
+                last_zch_times[chat_id] = current_time
+                last_thanks_times[chat_id] = current_time
             return
 
         # Проверяем права администратора в текущей группе
@@ -161,6 +317,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Сообщение закреплено в группе {chat_id}.")
             last_pinned_times[chat_id] = current_time  # Обновляем время последнего закрепления
             last_user_username[chat_id] = user.username if user.username else None  # Сохраняем username
+
+            # Планируем открепление сообщения через 45 минут
+            context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
 
             # Пересылаем сообщение в целевую группу
             if chat_id != TARGET_GROUP_ID:
@@ -190,160 +349,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при обработке сообщения: {e}")
 
-# Обработчик команды /reset_pin_timer
-async def reset_pin_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat.id
-    user = update.message.from_user
-
-    # Проверяем права пользователя
-    if not await is_admin_or_allowed_user(update, context):
-        await update.message.reply_text("У вас нет прав для выполнения этой команды.")
-        return
-
-    # Сбрасываем таймер
-    last_pinned_times[chat_id] = 0
-    logger.info(f"Таймер закрепа сброшен пользователем {user.username} в чате {chat_id}.")
-    success_message = await update.message.reply_text("Таймер закрепа успешно сброшен.")
-
-    # Удаляем команду и уведомление через 3 минуты
-    try:
-        await update.message.delete()
-        context.job_queue.run_once(delete_system_message, 180, data=success_message.message_id, chat_id=chat_id)
-    except Exception as e:
-        logger.error(f"Ошибка при удалении команды: {e}")
-
-# Обработчик команды /ban
-async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    chat_id = update.message.chat.id
-
-    # Проверяем права пользователя
-    if not await is_admin_or_allowed_user(update, context):
-        await update.message.reply_text("У вас нет прав для выполнения этой команды.")
-        return
-
-    # Получаем ID пользователя, которого нужно забанить
-    target_user = None
-    reply_to_message = update.message.reply_to_message
-
-    # Если команда отправлена в ответ на сообщение
-    if reply_to_message:
-        target_user = reply_to_message.from_user
-    else:
-        # Если команда содержит упоминание пользователя
-        if context.args and context.args[0].startswith("@"):
-            username = context.args[0][1:]  # Убираем "@" из имени пользователя
-            try:
-                chat_members = await context.bot.get_chat_member(chat_id=chat_id, user_id=user.id)
-                for member in chat_members:
-                    if member.user.username.lower() == username.lower():
-                        target_user = member.user
-                        break
-            except Exception as e:
-                logger.error(f"Ошибка при поиске пользователя {username}: {e}")
-                await update.message.reply_text(f"Не удалось найти пользователя @{username}.")
-                return
-
-    # Если целевой пользователь не найден
-    if not target_user:
-        await update.message.reply_text("Пожалуйста, укажите пользователя через упоминание или отправьте команду в ответ на его сообщение.")
-        return
-
-    # Баним пользователя
-    try:
-        await context.bot.ban_chat_member(chat_id=chat_id, user_id=target_user.id)
-        logger.info(f"Пользователь {target_user.username} забанен в чате {chat_id} пользователем {user.username}.")
-        await update.message.reply_text(f"Пользователь @{target_user.username} был забанен.")
-    except Exception as e:
-        logger.error(f"Ошибка при бане пользователя {target_user.id} в чате {chat_id}: {e}")
-        await update.message.reply_text("Не удалось забанить пользователя. Проверьте права бота.")
-
-    # Удаляем команду из чата
-    try:
-        await update.message.delete()
-    except Exception as e:
-        logger.error(f"Ошибка при удалении команды: {e}")
-
-# Обработчик команды /mute
-async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    chat_id = update.message.chat.id
-
-    # Проверяем права пользователя
-    if not await is_admin_or_allowed_user(update, context):
-        await update.message.reply_text("У вас нет прав для выполнения этой команды.")
-        return
-
-    # Получаем ID пользователя, которого нужно замутить
-    target_user = None
-    reply_to_message = update.message.reply_to_message
-
-    # Если команда отправлена в ответ на сообщение
-    if reply_to_message:
-        target_user = reply_to_message.from_user
-    else:
-        # Если команда содержит упоминание пользователя
-        if context.args and context.args[0].startswith("@"):
-            username = context.args[0][1:]  # Убираем "@" из имени пользователя
-            try:
-                chat_members = await context.bot.get_chat_member(chat_id=chat_id, user_id=user.id)
-                for member in chat_members:
-                    if member.user.username.lower() == username.lower():
-                        target_user = member.user
-                        break
-            except Exception as e:
-                logger.error(f"Ошибка при поиске пользователя {username}: {e}")
-                await update.message.reply_text(f"Не удалось найти пользователя @{username}.")
-                return
-
-    # Если целевой пользователь не найден
-    if not target_user:
-        await update.message.reply_text("Пожалуйста, укажите пользователя через упоминание или отправьте команду в ответ на его сообщение.")
-        return
-
-    # Получаем время мута из аргументов команды
-    mute_duration = None
-    if len(context.args) >= 1:
-        try:
-            # Если первый аргумент — это время (число)
-            mute_duration = int(context.args[-1]) * 60  # Преобразуем минуты в секунды
-        except ValueError:
-            await update.message.reply_text("Неверный формат времени. Укажите время в минутах.")
-            return
-
-    if mute_duration is None:
-        await update.message.reply_text("Пожалуйста, укажите время мута в минутах.")
-        return
-
-    # Мутим пользователя
-    try:
-        await context.bot.restrict_chat_member(
-            chat_id=chat_id,
-            user_id=target_user.id,
-            permissions={"can_send_messages": False},
-            until_date=time.time() + mute_duration
-        )
-        logger.info(f"Пользователь {target_user.username} замучен в чате {chat_id} на {mute_duration // 60} минут пользователем {user.username}.")
-        await update.message.reply_text(f"Пользователь @{target_user.username} замучен на {mute_duration // 60} минут.")
-    except Exception as e:
-        logger.error(f"Ошибка при муте пользователя {target_user.id} в чате {chat_id}: {e}")
-        await update.message.reply_text("Не удалось замутить пользователя. Проверьте права бота.")
-
-    # Удаляем команду из чата
-    try:
-        await update.message.delete()
-    except Exception as e:
-        logger.error(f"Ошибка при удалении команды: {e}")
-
 # Основная функция
 def main():
-    # Создаём объект Application
     application = Application.builder().token(BOT_TOKEN).build()
 
     # Регистрируем обработчики
     application.add_handler(CommandHandler("timer", reset_pin_timer))
-    application.add_handler(CommandHandler("ban", ban_user))
-    application.add_handler(CommandHandler("mute", mute_user))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Запускаем бота
