@@ -24,13 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Токен вашего бота
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-
-if not BOT_TOKEN:
-    print("Ошибка: BOT_TOKEN не найден!")
-    exit(1)
-
-print(f"BOT_TOKEN загружен: {BOT_TOKEN}")
+BOT_TOKEN = '8095859951:AAFGrYc5flFZk2EU8NNnsqpVWRJTGn009D4'
 
 # ID целевой группы (если нужно пересылать сообщения)
 TARGET_GROUP_ID = -1002437528572  # Замените на правильный ID группы
@@ -67,11 +61,11 @@ is_bot_active = True
 # Бан-лист
 banned_users = set()
 
-# База данных
 def get_db_connection():
-    database_path = os.getenv('DATABASE_PATH', 'bot_database.db')  # Используем переменную окружения
+    # Указываем путь к базе данных напрямую
+    database_path = 'bot_database.db'  # Путь к файлу базы данных
     conn = sqlite3.connect(database_path)
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = sqlite3.Row  # Это позволяет получать результаты запросов в виде словарей
     return conn
 
 
