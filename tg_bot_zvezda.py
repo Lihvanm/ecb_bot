@@ -9,11 +9,12 @@ from telegram.ext import (
     JobQueue,
 )
 import logging
-import time
 import re
 import sqlite3
+import time
 from datetime import datetime, time as dt_time  # Используйте alias для избежания конфликта
 import os
+from urllib.parse import urlparse
 import psycopg2
 from psycopg2.extras import DictCursor
 import asyncio
@@ -66,7 +67,7 @@ banned_users = set()
 def get_db_connection():
     try: 
     # Получаем строку подключения из переменных окружения
-        database_url = os.getenv('postgresql://postgres:NSHWEgFYGUgAmGtRvPxhNbIVHNhdNacT@postgres.railway.internal:5432/railway')
+        database_url = os.getenv('DATABASE_URL')
         if not database_url:
             raise ValueError("Переменная окружения DATABASE_URL не настроена.")
         # Парсим URL
@@ -1034,7 +1035,9 @@ async def deban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Основная функция
 def main():
+    logger.info("Запуск бота...")
     init_db() 
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM ban_list')
