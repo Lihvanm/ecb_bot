@@ -15,8 +15,6 @@ import sqlite3
 import time
 from datetime import datetime, time as dt_time  # Используйте alias для избежания конфликта
 import os
-import psycopg2
-from psycopg2.extras import DictCursor
 import asyncio
 
 # Настройка логирования
