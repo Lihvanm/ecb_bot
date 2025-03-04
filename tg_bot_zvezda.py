@@ -123,11 +123,16 @@ def init_db():
 
 init_db()
 
-# функция, которая будет включать бота (делать его активным).
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Привет! Я ваш бот. Введите /help для получения списка команд.")
+
 async def activate_bot(context: ContextTypes.DEFAULT_TYPE):
-    global is_bot_active
-    is_bot_active = True
-    logger.info("Бот активирован.")
+    try:
+        global is_bot_active
+        is_bot_active = True
+        logger.info("Бот активирован.")
+    except Exception as e:
+        logger.error(f"Ошибка при активации бота: {e}")
 
 # функция, которая будет выключать бота (делать его неактивным).
 async def deactivate_bot(context: ContextTypes.DEFAULT_TYPE):
@@ -137,12 +142,15 @@ async def deactivate_bot(context: ContextTypes.DEFAULT_TYPE):
 
 # функцию, которая будет временно включать бота на 2 минуты, а затем снова выключать его.
 async def temporary_activation(context: ContextTypes.DEFAULT_TYPE):
-    global is_bot_active
-    logger.info("Бот временно активирован на 2 минуты.")
-    is_bot_active = True
-    await asyncio.sleep(120)  # Бот активен 2 минуты
-    is_bot_active = False
-    logger.info("Бот вернулся в спящий режим.")
+    try:
+        global is_bot_active
+        logger.info("Бот временно активирован на 2 минуты.")
+        is_bot_active = True
+        await asyncio.sleep(120)  # Бот активен 2 минуты
+        is_bot_active = False
+        logger.info("Бот вернулся в спящий режим.")
+    except Exception as e:
+        logger.error(f"Ошибка при временном пробуждении бота: {e}")
 
 # Проверка прав администратора
 async def is_admin_or_musician(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -1015,13 +1023,13 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
 
-    # Расписание для выключения бота в 21:00
+# Расписание для выключения бота в 21:00
     job_queue.run_daily(deactivate_bot, time=time(hour=21, minute=0, second=0))
 
-    # Расписание для включения бота в 7:00
+# Расписание для включения бота в 7:00
     job_queue.run_daily(activate_bot, time=time(hour=7, minute=0, second=0))
 
-    # Расписание для временного пробуждения каждые 25 минут с 21:00 до 7:00
+# Расписание для временного пробуждения каждые 25 минут с 21:00 до 7:00
     for hour in range(21, 24):  # С 21:00 до 23:59
         for minute in range(0, 60, 25):  # Каждые 25 минут
             job_queue.run_daily(temporary_activation, time=time(hour=hour, minute=minute, second=0))
@@ -1030,9 +1038,8 @@ def main():
         for minute in range(0, 60, 25):  # Каждые 25 минут
             job_queue.run_daily(temporary_activation, time=time(hour=hour, minute=minute, second=0))
 
-
-    application = Application.builder().token(BOT_TOKEN).build()
-    job_queue = application.job_queue  # Инициализация JobQueue
+    # Добавление обработчиков команд и сообщений
+    application.add_handler(CommandHandler("start", start))
 
     application.add_handler(CommandHandler("timer", reset_pin_timer))
     application.add_handler(CommandHandler("del", delete_message))
@@ -1049,11 +1056,8 @@ def main():
     application.add_handler(CommandHandler("deban", deban_user))
     application.add_handler(CommandHandler("ban_history", ban_history))
     
-    # Добавление обработчиков команд и сообщений
-    application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Запуск бота
     try:
         application.run_polling()
         logger.info("Бот запущен. Ожидание сообщений...")
