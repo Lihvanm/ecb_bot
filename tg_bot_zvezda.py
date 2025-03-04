@@ -23,10 +23,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Токен вашего бота
-BOT_TOKEN = '7816260297:AAFDjI4_Tvsm9k6t8uymdUGkwD5zSptiCJI'
+BOT_TOKEN = '8095859951:AAFGrYc5flFZk2EU8NNnsqpVWRJTGn009D4'
 
 # ID целевой группы (если нужно пересылать сообщения)
-TARGET_GROUP_ID = -1002382138419  # Замените на правильный ID группы
+TARGET_GROUP_ID = -1002437528572 # Замените на правильный ID группы
 
 # Время в секундах (45 минут = 2700 секунд)
 PINNED_DURATION = 2700  # Изменено на 45 минут
