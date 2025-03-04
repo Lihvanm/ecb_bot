@@ -16,7 +16,6 @@ from datetime import datetime, time as dt_time  # Используйте alias �
 import os
 import psycopg2
 from psycopg2.extras import DictCursor
-from urllib.parse import urlparse
 import asyncio
 
 # Настройка логирования
@@ -67,7 +66,9 @@ banned_users = set()
 def get_db_connection():
     try: 
     # Получаем строку подключения из переменных окружения
-        database_url = os.getenv('DATABASE_URL')
+        database_url = os.getenv('postgresql://postgres:NSHWEgFYGUgAmGtRvPxhNbIVHNhdNacT@postgres.railway.internal:5432/railway')
+        if not database_url:
+            raise ValueError("Переменная окружения DATABASE_URL не настроена.")
         # Парсим URL
         result = urlparse(database_url)
     
@@ -85,6 +86,7 @@ def get_db_connection():
         raise
 
 def init_db():
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
