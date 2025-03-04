@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 # Токен вашего бота
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
+if not BOT_TOKEN:
+    print("Ошибка: BOT_TOKEN не найден!")
+    exit(1)
+
+print(f"BOT_TOKEN загружен: {BOT_TOKEN}")
+
 # ID целевой группы (если нужно пересылать сообщения)
 TARGET_GROUP_ID = -1002437528572  # Замените на правильный ID группы
 
