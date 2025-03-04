@@ -129,10 +129,13 @@ def init_db():
             )
         ''')
         conn.commit()
-        conn.close()
+        logger.info("Таблицы успешно созданы")
+    
     except Exception as e:
         logger.error(f"Ошибка при создании таблиц: {e}")
-        conn.rollback()
+        if conn:
+            conn.rollback()  # Откатываем транзакцию при ошибке
+    
     finally:
         if conn:
             conn.close()
