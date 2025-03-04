@@ -1068,13 +1068,8 @@ def main():
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    try:
-        application.run_polling()
-        logger.info("Бот запущен. Ожидание сообщений...")
-    except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
-    finally:
-        logger.info("Бот остановлен.")
+    application.run_polling()
+    logger.info("Бот запущен. Ожидание сообщений...")
 
 
 if __name__ == '__main__':
