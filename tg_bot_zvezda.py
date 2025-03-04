@@ -12,8 +12,8 @@ import logging
 import time
 import re
 import sqlite3
-from datetime import datetime, timedelta  # Добавьте timedelta в импорт
-from datetime import time
+import time
+from datetime import datetime, timedelta, time as dt_time
 import os
 
 # Настройка логирования
@@ -62,8 +62,10 @@ is_bot_active = True
 banned_users = set()
 
 def get_db_connection():
-    # Указываем путь к базе данных напрямую
-    database_path = 'bot_database.db'  # Путь к файлу базы данных
+    current_dir = os.getcwd()
+    logger.info(f"Текущая директория: {current_dir}")  # Логируем путь
+    database_path = 'bot_database.db'
+    logger.info(f"Полный путь к БД: {os.path.abspath(database_path)}")  # Логируем полный путь
     conn = sqlite3.connect(database_path)
     conn.row_factory = sqlite3.Row  # Это позволяет получать результаты запросов в виде словарей
     return conn
@@ -122,6 +124,8 @@ def init_db():
 
 
 init_db()
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Привет! Я ваш бот. Введите /help для получения списка команд.")
@@ -152,7 +156,7 @@ async def temporary_activation(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при временном пробуждении бота: {e}")
 
-# Проверка прав администратора
+# Проверяет, является ли пользователь администратором или музыкантом
 async def is_admin_or_musician(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     user = update.message.from_user
     chat_id = update.message.chat.id
@@ -1040,7 +1044,7 @@ def main():
 
     # Добавление обработчиков команд и сообщений
     application.add_handler(CommandHandler("start", start))
-
+    application.add_error_handler(error_handler)
     application.add_handler(CommandHandler("timer", reset_pin_timer))
     application.add_handler(CommandHandler("del", delete_message))
     application.add_handler(CommandHandler("lider", lider))
