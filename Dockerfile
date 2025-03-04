@@ -1,25 +1,23 @@
-# Базовый образ Python
-FROM python:3.10
+# Используем официальный образ Python
+FROM python:3.10-slim
 
-# Установка системных зависимостей
+# Устанавливаем зависимости системы
 RUN apt-get update && apt-get install -y \
-    libsqlite3-dev \
+    gcc \
     python3-dev \
-    build-essential
+    && rm -rf /var/lib/apt/lists/*
 
-# Создание директории для приложения
+# Создаем рабочую директорию
 WORKDIR /app
 
-# Копирование файлов проекта
-COPY . /app
+# Копируем зависимости
+COPY requirements.txt .
 
-# Установка зависимостей Python
-RUN python -m venv /opt/venv && \
-    . /opt/venv/bin/activate && \
-    pip install --upgrade pip && \
-    pip show python-telegram-bot
-    pip install --no-cache-dir -r requirements.txt
-    
+# Устанавливаем зависимости Python
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Команда для запуска бота
-CMD ["/opt/venv/bin/python", "tg_bot_zvezda.py"]
+# Копируем исходный код
+COPY . .
+
+# Запускаем бота
+CMD ["python", "tg_bot_zvezda.py"]
