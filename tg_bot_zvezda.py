@@ -10,7 +10,6 @@ from telegram.ext import (
 )
 import logging
 import re
-import sqlite3
 import time
 from datetime import datetime, time as dt_time  # Используйте alias для избежания конфликта
 import os
