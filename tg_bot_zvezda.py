@@ -15,6 +15,9 @@ import sqlite3
 import time
 from datetime import datetime, time as dt_time  # Используйте alias для избежания конфликта
 import os
+import psycopg2
+from psycopg2.extras import DictCursor
+from urllib.parse import urlparse
 import asyncio
 
 # Настройка логирования
@@ -63,66 +66,76 @@ is_bot_active = True
 banned_users = set()
 
 def get_db_connection():
-    current_dir = os.getcwd()
-    logger.info(f"Текущая директория: {current_dir}")  # Логируем путь
-    database_path = 'bot_database.db'
-    logger.info(f"Полный путь к БД: {os.path.abspath(database_path)}")  # Логируем полный путь
-    conn = sqlite3.connect(database_path)
-    conn.row_factory = sqlite3.Row  # Это позволяет получать результаты запросов в виде словарей
-    return conn
-
+    try: 
+    # Получаем строку подключения из переменных окружения
+        database_url = os.getenv('DATABASE_URL')
+        # Парсим URL
+        result = urlparse(database_url)
+    
+        # Подключаемся
+        conn = psycopg2.connect(
+            database=result.path[1:],  # Убираем первый символ '/'
+            user=result.username,
+            password=result.password,
+            host=result.hostname,
+            port=result.port
+        )
+        return conn
+    except Exception as e:
+        logger.error(f"Ошибка подключения к PostgreSQL: {e}")
+        raise
 
 def init_db():
-    conn = get_db_connection()
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS pinned_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER,
-            user_id INTEGER,
-            username TEXT,
-            message_text TEXT,
-            timestamp INTEGER
-        )
-    ''')
-    conn.execute('''
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Создание таблиц
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS pinned_messages (
+                id SERIAL PRIMARY KEY,
+                chat_id INTEGER,
+                user_id INTEGER,
+                username TEXT,
+                message_text TEXT,
+                timestamp INTEGER
+            )
+        ''')
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS active_users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER,
             username TEXT,
             delete_count INTEGER,
             timestamp INTEGER
-        )
-    ''')
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS birthdays (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER UNIQUE,
-            username TEXT,
-            birth_date TEXT,
-            last_congratulated_year INTEGER
-        )
-    ''')
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS ban_list (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            username TEXT,
-            phone TEXT,
-            ban_time INTEGER
-        )
-    ''')
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS ban_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            username TEXT,
-            reason TEXT,
-            timestamp INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS birthdays (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER UNIQUE,
+                username TEXT,
+                birth_date TEXT,
+                last_congratulated_year INTEGER
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS ban_history (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER,
+                username TEXT,
+                reason TEXT,
+                timestamp INTEGER
+            )
+        ''')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Ошибка при создании таблиц: {e}")
+        conn.rollback()
+    finally:
+        if conn:
+            conn.close()
 
 init_db()
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -391,7 +404,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn = get_db_connection()
             conn.execute('''
                 INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
             ''', (chat_id, user.id, user.username, text, current_time))
             conn.commit()
             conn.close()
@@ -449,7 +462,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn = get_db_connection()
                 conn.execute('''
                     INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s)
                 ''', (chat_id, user.id, user.username, text, current_time))
                 conn.commit()
                 conn.close()
@@ -472,7 +485,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_db_connection()
         conn.execute('''
             INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s)
         ''', (chat_id, user.id, user.username, text, current_time))
         conn.commit()
         conn.close()
@@ -1077,4 +1090,5 @@ def main():
 
 
 if __name__ == '__main__':
+    init_db()  # Создаем таблицы при старте
     main()
