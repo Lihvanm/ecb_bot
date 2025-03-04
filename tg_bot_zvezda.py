@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import psycopg2
 from psycopg2.extras import DictCursor
 import asyncio
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
