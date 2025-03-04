@@ -1030,6 +1030,7 @@ async def deban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Основная функция
 def main():
+    init_db() 
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM ban_list')
@@ -1090,5 +1091,4 @@ def main():
 
 
 if __name__ == '__main__':
-    init_db()  # Создаем таблицы при старте
     main()
