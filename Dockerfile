@@ -17,7 +17,10 @@ COPY . /app
 RUN python -m venv /opt/venv && \
     . /opt/venv/bin/activate && \
     pip install --upgrade pip && \
+    pip show python-telegram-bot
+    pip install --upgrade python-telegram-bot
     pip install --no-cache-dir -r requirements.txt
+    
 
 # Команда для запуска бота
 CMD ["/opt/venv/bin/python", "tg_bot_zvezda.py"]
