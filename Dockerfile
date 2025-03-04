@@ -19,5 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копируем исходный код
 COPY . .
 
+# Проверяем версию Python
+RUN python3.10 --version
+
 # Запускаем бота
-CMD ["python", "tg_bot_zvezda.py"]
+CMD ["python3.10", "tg_bot_zvezda.py"]
