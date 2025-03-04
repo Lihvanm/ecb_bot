@@ -1027,6 +1027,14 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
 
+    # Расписание для выключения бота в 21:00
+    job_queue.run_daily(deactivate_bot, time=dt_time(hour=21, minute=0, second=0))
+    logger.info("Запланировано выключение бота в 21:00.")
+
+    # Расписание для включения бота в 7:00
+    job_queue.run_daily(activate_bot, time=dt_time(hour=7, minute=0, second=0))
+    logger.info("Запланировано включение бота в 07:00.")
+    
     # Расписание для временного пробуждения каждые 25 минут с 21:00 до 7:00
     for hour in range(21, 24):  # С 21:00 до 23:59
         for minute in range(0, 60, 25):  # Каждые 25 минут
@@ -1037,14 +1045,6 @@ def main():
         for minute in range(0, 60, 25):  # Каждые 25 минут
             job_queue.run_daily(temporary_activation, time=dt_time(hour=hour, minute=minute, second=0))
             logger.info(f"Запланировано временное пробуждение бота в {hour:02d}:{minute:02d}.")
-
-    # Расписание для выключения бота в 21:00
-    job_queue.run_daily(deactivate_bot, time=dt_time(hour=21, minute=0, second=0))
-    logger.info("Запланировано выключение бота в 21:00.")
-
-    # Расписание для включения бота в 7:00
-    job_queue.run_daily(activate_bot, time=dt_time(hour=7, minute=0, second=0))
-    logger.info("Запланировано включение бота в 07:00.")
 
     # Добавление обработчиков команд и сообщений
     application.add_handler(CommandHandler("start", start))
