@@ -9,15 +9,11 @@ from telegram.ext import (
     JobQueue,
 )
 import logging
+import time
 import re
 import sqlite3
-import time
-from datetime import datetime, time as dt_time  # Используйте alias для избежания конфликта
-import os
-from urllib.parse import urlparse
-import psycopg2
-from psycopg2.extras import DictCursor
-import asyncio
+from datetime import datetime, timedelta  # Добавьте timedelta в импорт
+
 
 # Настройка логирования
 logging.basicConfig(
@@ -27,10 +23,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Токен вашего бота
-BOT_TOKEN = '8095859951:AAFGrYc5flFZk2EU8NNnsqpVWRJTGn009D4'
+BOT_TOKEN = '7816260297:AAFDjI4_Tvsm9k6t8uymdUGkwD5zSptiCJI'
 
 # ID целевой группы (если нужно пересылать сообщения)
-TARGET_GROUP_ID = -1002437528572  # Замените на правильный ID группы
+TARGET_GROUP_ID = -1002382138419  # Замените на правильный ID группы
 
 # Время в секундах (45 минут = 2700 секунд)
 PINNED_DURATION = 2700  # Изменено на 45 минут
@@ -58,124 +54,73 @@ last_user_username = {}  # {chat_id: username}
 last_zch_times = {}  # {chat_id: timestamp}
 last_thanks_times = {}  # {chat_id: timestamp}
 pinned_messages = {}  # {chat_id: message_id}  # Добавлено
-# Глобальная переменная для управления состоянием бота
-is_bot_active = True
 
 # Бан-лист
 banned_users = set()
 
+# База данных
 def get_db_connection():
-    try: 
-    # Получаем строку подключения из переменных окружения
-        database_url = os.getenv('DATABASE_URL')
-        if not database_url:
-            raise ValueError("Переменная окружения DATABASE_URL не настроена.")
-        # Парсим URL
-        result = urlparse(database_url)
-    
-        # Подключаемся
-        conn = psycopg2.connect(
-            database=result.path[1:],  # Убираем первый символ '/'
-            user=result.username,
-            password=result.password,
-            host=result.hostname,
-            port=result.port
-        )
-        return conn
-    except Exception as e:
-        logger.error(f"Ошибка подключения к PostgreSQL: {e}")
-        raise
+    conn = sqlite3.connect('bot_database.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
 
 def init_db():
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Создание таблиц
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS pinned_messages (
-                id SERIAL PRIMARY KEY,
-                chat_id INTEGER,
-                user_id INTEGER,
-                username TEXT,
-                message_text TEXT,
-                timestamp INTEGER
-            )
-        ''')
-        cursor.execute('''
+    conn = get_db_connection()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS pinned_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            user_id INTEGER,
+            username TEXT,
+            message_text TEXT,
+            timestamp INTEGER
+        )
+    ''')
+    conn.execute('''
         CREATE TABLE IF NOT EXISTS active_users (
-            id SERIAL PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             username TEXT,
             delete_count INTEGER,
             timestamp INTEGER
-            )
-        ''')
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS birthdays (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER UNIQUE,
-                username TEXT,
-                birth_date TEXT,
-                last_congratulated_year INTEGER
-            )
-        ''')
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS ban_history (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER,
-                username TEXT,
-                reason TEXT,
-                timestamp INTEGER
-            )
-        ''')
-        conn.commit()
-        logger.info("Таблицы успешно созданы")
-    
-    except Exception as e:
-        logger.error(f"Ошибка при создании таблиц: {e}")
-        if conn:
-            conn.rollback()  # Откатываем транзакцию при ошибке
-    
-    finally:
-        if conn:
-            conn.close()
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS birthdays (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER UNIQUE,
+            username TEXT,
+            birth_date TEXT,
+            last_congratulated_year INTEGER
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS ban_list (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            phone TEXT,
+            ban_time INTEGER
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS ban_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            reason TEXT,
+            timestamp INTEGER
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
 
 init_db()
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(msg="Exception while handling an update:", exc_info=context.error)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я ваш бот. Введите /help для получения списка команд.")
 
-async def activate_bot(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        global is_bot_active
-        is_bot_active = True
-        logger.info("Бот активирован.")
-    except Exception as e:
-        logger.error(f"Ошибка при активации бота: {e}")
-
-# функция, которая будет выключать бота (делать его неактивным).
-async def deactivate_bot(context: ContextTypes.DEFAULT_TYPE):
-    global is_bot_active
-    is_bot_active = False
-    logger.info("Бот деактивирован.")
-
-# функцию, которая будет временно включать бота на 2 минуты, а затем снова выключать его.
-async def temporary_activation(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        global is_bot_active
-        logger.info("Бот временно активирован на 2 минуты.")
-        is_bot_active = True
-        await asyncio.sleep(120)  # Бот активен 2 минуты
-        is_bot_active = False
-        logger.info("Бот вернулся в спящий режим.")
-    except Exception as e:
-        logger.error(f"Ошибка при временном пробуждении бота: {e}")
-
-# Проверяет, является ли пользователь администратором или музыкантом
+# Проверка прав администратора
 async def is_admin_or_musician(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     user = update.message.from_user
     chat_id = update.message.chat.id
@@ -311,12 +256,6 @@ async def delete_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Обработчик новых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global is_bot_active
-
-    if not is_bot_active:
-        logger.info("Бот неактивен. Сообщение игнорируется.")
-        return
-    
     message = update.message
     user = message.from_user
     chat_id = message.chat.id
@@ -409,7 +348,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn = get_db_connection()
             conn.execute('''
                 INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?)
             ''', (chat_id, user.id, user.username, text, current_time))
             conn.commit()
             conn.close()
@@ -467,7 +406,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn = get_db_connection()
                 conn.execute('''
                     INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (?, ?, ?, ?, ?)
                 ''', (chat_id, user.id, user.username, text, current_time))
                 conn.commit()
                 conn.close()
@@ -490,7 +429,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_db_connection()
         conn.execute('''
             INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (?, ?, ?, ?, ?)
         ''', (chat_id, user.id, user.username, text, current_time))
         conn.commit()
         conn.close()
@@ -1035,9 +974,6 @@ async def deban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Основная функция
 def main():
-    logger.info("Запуск бота...")
-    init_db() 
-
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM ban_list')
@@ -1045,32 +981,9 @@ def main():
     banned_users = {row['user_id'] for row in cursor.fetchall()}
     conn.close()
 
-    # Инициализация JobQueue
     application = Application.builder().token(BOT_TOKEN).build()
-    job_queue = application.job_queue
+    job_queue = application.job_queue  # Инициализация JobQueue
 
-    # Расписание для временного пробуждения каждые 25 минут с 21:00 до 7:00
-    for hour in range(21, 24):
-        for minute in range(0, 60, 25):
-            job_queue.run_daily(temporary_activation, time=dt_time(hour=hour, minute=minute, second=0))
-            logger.info(f"Запланировано временное пробуждение бота в {hour:02d}:{minute:02d}.")
-
-    for hour in range(0, 7):  # С 00:00 до 6:59
-        for minute in range(0, 60, 25):  # Каждые 25 минут
-            job_queue.run_daily(temporary_activation, time=dt_time(hour=hour, minute=minute, second=0))
-            logger.info(f"Запланировано временное пробуждение бота в {hour:02d}:{minute:02d}.")
-
-    # Расписание для выключения бота в 21:00
-    job_queue.run_daily(deactivate_bot, time=dt_time(hour=21, minute=0, second=0))
-    logger.info("Запланировано выключение бота в 21:00.")
-
-    # Расписание для включения бота в 7:00
-    job_queue.run_daily(activate_bot, time=dt_time(hour=7, minute=0, second=0))
-    logger.info("Запланировано включение бота в 07:00.")
-
-    # Добавление обработчиков команд и сообщений
-    application.add_handler(CommandHandler("start", start))
-    application.add_error_handler(error_handler)
     application.add_handler(CommandHandler("timer", reset_pin_timer))
     application.add_handler(CommandHandler("del", delete_message))
     application.add_handler(CommandHandler("lider", lider))
@@ -1084,8 +997,7 @@ def main():
     application.add_handler(CommandHandler("ban_list", ban_list))
     application.add_handler(CommandHandler("ban", ban_user))
     application.add_handler(CommandHandler("deban", deban_user))
-    application.add_handler(CommandHandler("ban_history", ban_history))
-    
+    application.add_handler(CommandHandler("ban_history", ban_history)) 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     try:
