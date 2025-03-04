@@ -14,6 +14,7 @@ import re
 import sqlite3
 from datetime import datetime, timedelta  # Добавьте timedelta в импорт
 from datetime import time
+import os
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Токен вашего бота
-BOT_TOKEN = '8095859951:AAFGrYc5flFZk2EU8NNnsqpVWRJTGn009D4'
+BOT_TOKEN = os.getenv('BOT_TOKEN')
 
 # ID целевой группы (если нужно пересылать сообщения)
 TARGET_GROUP_ID = -1002437528572  # Замените на правильный ID группы
