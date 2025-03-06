@@ -23,10 +23,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Токен вашего бота
-BOT_TOKEN = '8095859951:AAFGrYc5flFZk2EU8NNnsqpVWRJTGn009D4'
+BOT_TOKEN = '7816260297:AAFDjI4_Tvsm9k6t8uymdUGkwD5zSptiCJI'
 
 # ID целевой группы (если нужно пересылать сообщения)
-TARGET_GROUP_ID = -1002437528572 # Замените на правильный ID группы
+TARGET_GROUP_ID = -1002382138419  # Замените на правильный ID группы
 
 # Время в секундах (45 минут = 2700 секунд)
 PINNED_DURATION = 2700  # Изменено на 45 минут
@@ -145,7 +145,6 @@ async def delete_system_message(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data)
     except Exception as e:
         logger.error(f"Ошибка при удалении системного сообщения: {e}")
-
 
 # Команда /reset_pin_timer
 async def reset_pin_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -391,8 +390,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     thanks_message = await context.bot.send_message(
                         chat_id=chat_id,
                         text=f"Спасибо за вашу бдительность! Звезда часа уже замечена пользователем "
-                             f"{'@' + last_user_username.get(chat_id, 'неизвестным')} и закреплена в группе. "
-                             f"Надеюсь, в следующий раз именно Вы станете нашей 🌟 !!!"
+                             f"{'@' + (last_user_username.get(chat_id, 'неизвестным') or user.first_name)}, который вошел в рейтинг - /lider. "
+                             f"Но Вы также попали в рейтинг аивности - /active"
                     )
                     context.job_queue.run_once(delete_system_message, 180, data=thanks_message.message_id, chat_id=chat_id)
                     last_thanks_times[chat_id] = current_time
@@ -498,7 +497,10 @@ async def check_all_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # Команда /liderX
 async def lider(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Получаем количество дней из аргументов команды, по умолчанию 1 день
     days = int(context.args[0]) if context.args else 1
+
+    # Подключаемся к базе данных и выполняем запрос
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -512,16 +514,35 @@ async def lider(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = cursor.fetchall()
     conn.close()
 
+    # Если результаты отсутствуют, отправляем сообщение об отсутствии данных
     if not results:
         response = await update.message.reply_text("Нет данных за указанный период.")
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
         await update.message.delete()  # Удаляем команду
         return
 
-    text = f"ТОП участников по закрепам за - {days} д.:\n"
+    # Формируем текст для вывода ТОП-участников
+    text = f"ТОП участников по закрепам за {days} д.:\n"
     for i, row in enumerate(results, start=1):
-        text += f"{i}. @{row['username']} — {row['count']} 🌟\n"
+        user_id = row['user_id']
+        username = row['username']
 
+        # Определяем способ обращения к пользователю
+        try:
+            chat_member = await context.bot.get_chat_member(update.message.chat.id, user_id)
+            user_name = (
+                chat_member.user.first_name or  # Используем имя, если оно есть
+                (f"@{chat_member.user.username}" if chat_member.user.username else None) or  # Или логин с собакой
+                f"ID: {chat_member.user.id}"  # Или ID
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при получении информации о пользователе {user_id}: {e}")
+            user_name = f"ID: {user_id}"
+
+        # Добавляем строку в текст
+        text += f"{i}. {user_name} — {row['count']} 🌟\n"
+
+    # Отправляем сообщение с результатами
     await update.message.reply_text(text)
     await update.message.delete()  # Удаляем команду
 
@@ -555,7 +576,10 @@ async def zh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Команда /activeX
 async def active(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Получаем количество дней из аргументов команды, по умолчанию 1 день
     days = int(context.args[0]) if context.args else 1
+
+    # Подключаемся к базе данных и выполняем запрос
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -569,16 +593,35 @@ async def active(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = cursor.fetchall()
     conn.close()
 
+    # Если результаты отсутствуют, отправляем сообщение об отсутствии данных
     if not results:
         response = await update.message.reply_text("Нет активных пользователей за указанный период.")
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
         await update.message.delete()  # Удаляем команду
         return
 
+    # Формируем текст для вывода ТОП-участников
     text = f"Самые активные пользователи за период - {days} д.:\n"
     for i, row in enumerate(results, start=1):
-        text += f"{i}. @{row['username']} — {row['total_deletes']} раз(а) написал(а)⭐🕐\n"
+        user_id = row['user_id']
+        username = row['username']
 
+        # Определяем способ обращения к пользователю
+        try:
+            chat_member = await context.bot.get_chat_member(update.message.chat.id, user_id)
+            user_mention = (
+                chat_member.user.first_name or  # Используем имя, если оно есть
+                (f"@{chat_member.user.username}" if chat_member.user.username else None) or  # Или логин с собакой
+                f"ID: {chat_member.user.id}"  # Или ID
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при получении информации о пользователе {user_id}: {e}")
+            user_mention = f"ID: {user_id}"
+
+        # Добавляем строку в текст
+        text += f"{i}. {user_mention} — {row['total_deletes']} раз(а) написал(а) ⭐\n"
+
+    # Отправляем сообщение с результатами
     await update.message.reply_text(text)
     await update.message.delete()  # Удаляем команду
 
