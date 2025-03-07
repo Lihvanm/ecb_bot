@@ -1235,74 +1235,73 @@ async def deban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.delete()  # Удаляем команду
 
 # Основная функция
-# Новый блок запуска бота (заменяет старый main())
-async def run_bot():
+async def main():
+     # Загружаем забаненных пользователей при старте
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT user_id FROM ban_list')
+        rows = cur.fetchall()
+        banned_users.update(row['user_id'] for row in rows)
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке ban_list: {e}")
+    finally:
+        cur.close()
+        conn.close()
+        
     global db_initialized
     if not db_initialized:
         init_db()
         db_initialized = True
 
-    global banned_users
-    banned_users = set()
+    # Инициализация бота
+    application = Application.builder() \
+        .token(BOT_TOKEN) \
+        .read_timeout(30) \
+        .write_timeout(30) \
+        .connect_timeout(30) \
+        .build()
 
-    # Загрузка забаненных пользователей
+    # Регистрация обработчиков
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("timer", reset_pin_timer))
+    application.add_handler(CommandHandler("del", delete_message))
+    application.add_handler(CommandHandler("lider", lider))
+    application.add_handler(CommandHandler("zh", zh))
+    application.add_handler(CommandHandler("active", active))
+    application.add_handler(CommandHandler("dr", dr))
+    application.add_handler(CommandHandler("druser", druser))
+    application.add_handler(CommandHandler("id", get_user_id))
+    application.add_handler(CommandHandler("birthday", birthday))
+    application.add_handler(CommandHandler("check_birthdays", check_all_birthdays))
+    application.add_handler(CommandHandler("ban_list", ban_list))
+    application.add_handler(CommandHandler("ban", ban_user))
+    application.add_handler(CommandHandler("deban", deban_user))
+    application.add_handler(CommandHandler("ban_history", ban_history))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Запуск бота
     try:
-        with get_db_connection() as conn, conn.cursor() as cur:
-            cur.execute('SELECT user_id FROM ban_list')
-            rows = cur.fetchall()
-            banned_users = {row['user_id'] for row in rows}
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        logger.info("Бот успешно запущен")
+        await application.updater.dispatcher.wait_closed()
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен пользователем")
+        await application.stop()
+        await application.shutdown()
     except Exception as e:
-        logger.error(f"Ошибка при загрузке ban_list: {e}")
-
-    while True:
-        try:
-            # Создаем новый экземпляр приложения
-            application = Application.builder().token(BOT_TOKEN).build()
-            
-            # Регистрация обработчиков
-            application.add_handler(CommandHandler("timer", reset_pin_timer))
-            application.add_handler(CommandHandler("del", delete_message))
-            application.add_handler(CommandHandler("lider", lider))
-            application.add_handler(CommandHandler("zh", zh))
-            application.add_handler(CommandHandler("active", active))
-            application.add_handler(CommandHandler("dr", dr))
-            application.add_handler(CommandHandler("druser", druser))
-            application.add_handler(CommandHandler("id", get_user_id))
-            application.add_handler(CommandHandler("birthday", birthday))
-            application.add_handler(CommandHandler("check_birthdays", check_all_birthdays))
-            application.add_handler(CommandHandler("ban_list", ban_list))
-            application.add_handler(CommandHandler("ban", ban_user))
-            application.add_handler(CommandHandler("deban", deban_user))
-            application.add_handler(CommandHandler("ban_history", ban_history))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-            # Запуск
-            await application.initialize()
-            await application.start()
-            await application.updater.start_polling()
-            logger.info("Бот успешно запущен")
-            
-            # Ожидание завершения
-            await application.updater.dispatcher.wait_closed()
-            
-        except KeyboardInterrupt:
-            logger.info("Бот остановлен пользователем")
-            await application.stop()
-            await application.shutdown()
-            break
-            
-        except Exception as e:
-            logger.error(f"Критическая ошибка: {e}")
-            logger.info("Перезапуск через 10 секунд...")
-            await asyncio.sleep(10)
-            
-        finally:
-            if 'application' in locals():
-                await application.stop()
-                await application.shutdown()
+        logger.error(f"Критическая ошибка: {e}")
+        await application.stop()
+        await application.shutdown()
+        raise
 
 if __name__ == '__main__':
     try:
-        asyncio.run(run_bot())
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Бот остановлен пользователем")
+    except Exception as e:
+        logger.error(f"Необработанное исключение: {e}")
+        raise
