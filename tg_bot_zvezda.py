@@ -13,7 +13,6 @@ import re
 import os
 import psycopg2
 from psycopg2.extras import DictCursor
-from dotenv import load_dotenv
 from datetime import timedelta,  datetime as dt, time as dt_time
 import time
 import asyncio
@@ -24,9 +23,6 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
-
-# Загрузка переменных окружения
-load_dotenv()
 
 # Получение переменных окружения
 DATABASE_URL = os.getenv('DATABASE_URL')
