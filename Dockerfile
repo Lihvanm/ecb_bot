@@ -1,10 +1,11 @@
 # Используем официальный образ Python
 FROM python:3.10-slim
 
-# Устанавливаем зависимости системы
+# Устанавливаем системные зависимости
 RUN apt-get update && apt-get install -y \
     gcc \
     python3-dev \
+    libpq-dev \  # Для работы psycopg2
     && rm -rf /var/lib/apt/lists/*
 
 # Создаем рабочую директорию
@@ -13,14 +14,14 @@ WORKDIR /app
 # Копируем зависимости
 COPY requirements.txt .
 
-# Устанавливаем зависимости Python
-RUN pip install --no-cache-dir -r requirements.txt
+# Обновляем pip и устанавливаем зависимости
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir \
+    --use-deprecated=legacy-resolver \  # Для обхода конфликтов зависимостей
+    -r requirements.txt
 
 # Копируем исходный код
 COPY . .
-
-# Проверяем версию Python
-RUN python3.10 --version
 
 # Запускаем бота
 CMD ["python3.10", "tg_bot_zvezda.py"]
