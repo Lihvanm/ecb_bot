@@ -1234,6 +1234,7 @@ async def deban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
         await update.message.delete()  # Удаляем команду
 
+# Основная функция
 async def main():
     global db_initialized
     if not db_initialized:
@@ -1260,6 +1261,7 @@ async def main():
             conn.close()
 
     application = Application.builder().token(BOT_TOKEN).build()
+    job_queue = application.job_queue  # Инициализация JobQueue
 
     # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start))
@@ -1283,7 +1285,20 @@ async def main():
     logger.info("Бот запущен. Ожидание сообщений...")
     await application.run_polling()
 
+async def run_bot():
+    while True:
+        try:
+            await main()
+        except KeyboardInterrupt:
+            logger.info("Бот остановлен пользователем.")
+            break
+        except Exception as e:
+            logger.error(f"Ошибка при запуске бота: {e}")
+            logger.info("Повторный запуск через 10 секунд...")
+            await asyncio.sleep(10)
+
 if __name__ == '__main__':
-    # Просто запускаем бота
-    import asyncio
-    asyncio.run(main())
+    try:
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен пользователем.")
