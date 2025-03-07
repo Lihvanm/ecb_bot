@@ -1,5 +1,5 @@
-python-telegram-bot==20.3
 apscheduler==3.10.1
 python-telegram-bot[job-queue]
-psycopg2-binary>=2.9.3
-python-dotenv>=0.21.0
+python-telegram-bot==20.8
+psycopg2-binary==2.9.9
+python-dotenv==1.0.1
