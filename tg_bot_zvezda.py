@@ -1236,6 +1236,8 @@ async def deban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Основная функция
 async def main():
+    init_db()
+        
      # Загружаем забаненных пользователей при старте
     conn = get_db_connection()
     cur = conn.cursor()
@@ -1248,11 +1250,8 @@ async def main():
     finally:
         cur.close()
         conn.close()
-        
-    global db_initialized
-    if not db_initialized:
-        init_db()
-        db_initialized = True
+
+    
 
     # Инициализация бота
     application = Application.builder() \
