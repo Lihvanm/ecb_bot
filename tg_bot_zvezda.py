@@ -13,6 +13,7 @@ import re
 import os
 import psycopg2
 from psycopg2.extras import DictCursor
+from dotenv import load_dotenv
 from datetime import timedelta,  datetime as dt, time as dt_time
 import time
 import asyncio
@@ -23,6 +24,9 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+# Загрузка переменных окружения
+load_dotenv()
 
 # Получение переменных окружения
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -1230,34 +1234,34 @@ async def deban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
         await update.message.delete()  # Удаляем команду
 
-# Основная функция
 async def main():
-    init_db()
-        
-     # Загружаем забаненных пользователей при старте
-    conn = get_db_connection()
-    cur = conn.cursor()
+    global db_initialized
+    if not db_initialized:
+        init_db()  # Инициализация базы данных
+        db_initialized = True
+
+    global banned_users
+    banned_users = set()
+
     try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # Выполняем запрос к базе данных
         cur.execute('SELECT user_id FROM ban_list')
+        # Получаем все строки результата
         rows = cur.fetchall()
-        banned_users.update(row['user_id'] for row in rows)
+        banned_users = {row['user_id'] for row in rows}
     except Exception as e:
-        logger.error(f"Ошибка при загрузке ban_list: {e}")
+        logger.error(f"Ошибка при выполнении запроса: {e}")
     finally:
-        cur.close()
-        conn.close()
+        if 'cur' in locals():
+            cur.close()
+        if 'conn' in locals():
+            conn.close()
 
-    
+    application = Application.builder().token(BOT_TOKEN).build()
 
-    # Инициализация бота
-    application = Application.builder() \
-        .token(BOT_TOKEN) \
-        .read_timeout(30) \
-        .write_timeout(30) \
-        .connect_timeout(30) \
-        .build()
-
-    # Регистрация обработчиков
+    # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("timer", reset_pin_timer))
     application.add_handler(CommandHandler("del", delete_message))
@@ -1276,27 +1280,10 @@ async def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Запуск бота
-    try:
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling()
-        logger.info("Бот успешно запущен")
-        await application.updater.dispatcher.wait_closed()
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен пользователем")
-        await application.stop()
-        await application.shutdown()
-    except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
-        await application.stop()
-        await application.shutdown()
-        raise
+    logger.info("Бот запущен. Ожидание сообщений...")
+    await application.run_polling()
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен пользователем")
-    except Exception as e:
-        logger.error(f"Необработанное исключение: {e}")
-        raise
+    # Просто запускаем бота
+    import asyncio
+    asyncio.run(main())
