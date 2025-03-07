@@ -356,7 +356,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Автопоздравление именинников
             await auto_birthdays(context, chat_id)
             context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
-            # Пересылка сообщения в целевую группу без добавления в базу данных
+
             if chat_id != TARGET_GROUP_ID:
                 new_text = text.replace("🌟 ", "").strip()
                 forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
@@ -390,9 +390,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if current_time - last_thanks_time >= 180:
                     thanks_message = await context.bot.send_message(
                         chat_id=chat_id,
-                       text=f"Спасибо за вашу бдительность! Звезда часа уже замечена пользователем "
-                             f"{'@' + (last_user_username.get(chat_id, 'неизвестным') or user.first_name)}, который вошел в рейтинг - /lider. "
-                             f"Но Вы также попали в рейтинг аивности - /active"
+                        text=f"Спасибо за вашу бдительность! Звезда часа уже замечена пользователем "
+                             f"{'@' + last_user_username.get(chat_id, 'неизвестным')} и закреплена в группе. "
+                             f"Надеюсь, в следующий раз именно Вы станете нашей 🌟 !!!"
                     )
                     context.job_queue.run_once(delete_system_message, 180, data=thanks_message.message_id, chat_id=chat_id)
                     last_thanks_times[chat_id] = current_time
@@ -403,13 +403,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 last_pinned_times[chat_id] = current_time
                 last_user_username[chat_id] = user.username if user.username else None
 
-                conn = get_db_connection()
-                conn.execute('''
-                    INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (chat_id, user.id, user.username, text, current_time))
-                conn.commit()
-                conn.close()
+            
 
                 correction_message = await context.bot.send_message(
                     chat_id=chat_id,
@@ -425,8 +419,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.pin()
         last_pinned_times[chat_id] = current_time
         last_user_username[chat_id] = user.username if user.username else None
-
-        # Убрано добавление в базу данных здесь
 
         # Автопоздравление именинников
         await auto_birthdays(context, chat_id)
@@ -445,9 +437,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.pin()
         last_pinned_times[chat_id] = current_time
         last_user_username[chat_id] = user.username if user.username else None
-        
-        # Убрано добавление в базу данных здесь
-        
 
         # Пересылка сообщения в целевую группу
         if chat_id != TARGET_GROUP_ID:
@@ -658,7 +647,7 @@ async def auto_birthdays(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         # Поздравляем пользователя
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🎉{user_name} 🎊 - Поздравляю тебя с днем рождения! 🍀Желаю умножить свой cash🎁back x10 раз 🎉. _\_/_\_/_\_/_\_/_\_/_\_/_\_/_ Чтобы добавить свою дату рождения в базу, напишите команду с датой в формате /dr ДД.ММ.ГГГГ"
+            text=f"🎉{user_name} 🎊 - Поздравляю тебя с днем рождения! 🍀Желаю умножить свой cash🎁back x10 раз 🎉. __________________________ Чтобы добавить свою дату рождения в базу, напишите команду с датой в формате /dr ДД.ММ.ГГГГ"
         )
 
         # Обновляем год последнего поздравления
