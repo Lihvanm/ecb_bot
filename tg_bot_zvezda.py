@@ -2,6 +2,7 @@ import logging
 import re
 import os
 import psycopg2
+import asyncio  
 from psycopg2.extras import DictCursor
 from datetime import datetime, timedelta
 from telegram import Update, ChatPermissions
