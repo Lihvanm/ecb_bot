@@ -13,7 +13,6 @@ import re
 import os
 import psycopg2
 from psycopg2.extras import DictCursor
-from dotenv import load_dotenv
 from datetime import timedelta,  datetime as dt, time as dt_time
 import time
 import asyncio
