@@ -14,10 +14,10 @@ WORKDIR /app
 # Копируем зависимости
 COPY requirements.txt .
 
-# Обновляем pip и устанавливаем зависимости
+# Устанавливаем зависимости Python
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir \
-    --use-deprecated=legacy-resolver \  # Для обхода конфликтов зависимостей
+    --use-deprecated=legacy-resolver \
     -r requirements.txt
 
 # Копируем исходный код
