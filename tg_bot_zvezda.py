@@ -543,29 +543,38 @@ async def active(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Команда /dr
 async def dr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
-    if context.args:
-        birth_date = context.args[0]
-        if re.match(r"\d{2}\.\d{2}\.\d{4}", birth_date):
-            conn = get_db_connection()
-            
-            with conn.cursor() as cursor:
-                cursor.execute('''
-                INSERT OR REPLACE INTO birthdays (user_id, username, birth_date, last_congratulated_year)
-                VALUES (%s, %s, %s, %s)
-            ''', (user.id, user.username, birth_date, 0))  # 0 означает, что пользователь еще не был поздравлен
-            conn.commit()
-
-            response = await update.message.reply_text(f"Дата рождения сохранена: {birth_date}")
-            context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
-            await update.message.delete()  # Удаляем команду
-        else:
-            response = await update.message.reply_text("Неверный формат даты. Напишите одним сообщением  /dr ДД.ММ.ГГГГ")
-            context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
-            await update.message.delete()  # Удаляем команду
-    else:
+    if not context.args:
         response = await update.message.reply_text("Напишите свою дату рождения в формате ДД.ММ.ГГГГ")
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
         await update.message.delete()  # Удаляем команду
+        return
+
+    birth_date = context.args[0]
+    if not re.match(r"\d{2}\.\d{2}\.\d{4}", birth_date):
+        response = await update.message.reply_text("Неверный формат даты. Используйте ДД.ММ.ГГГГ.")
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
+        await update.message.delete()  # Удаляем команду
+        return
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO birthdays (user_id, username, birth_date, last_congratulated_year)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE 
+                SET birth_date = EXCLUDED.birth_date, last_congratulated_year = EXCLUDED.last_congratulated_year
+            ''', (user.id, user.username, birth_date, 0))  # 0 означает, что пользователь еще не был поздравлен
+        conn.commit()
+        response = await update.message.reply_text(f"Дата рождения сохранена: {birth_date}")
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении даты рождения пользователя {user.id}: {e}")
+        response = await update.message.reply_text("Произошла ошибка при сохранении даты рождения. Попробуйте снова.")
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
+    finally:
+        conn.close()
+    await update.message.delete()  # Удаляем команду
 
 
 async def birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -604,39 +613,43 @@ async def birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def auto_birthdays(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     today = time.strftime("%d.%m")  # Сегодняшняя дата в формате ДД.ММ
     current_year = datetime.now().year  # Текущий год
+
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute('''
-            SELECT user_id, username 
-            FROM birthdays 
-            WHERE substr(birth_date, 1, 5) = %s AND (last_congratulated_year IS NULL OR last_congratulated_year < %s)
-        ''', (today, current_year))
-        results = cursor.fetchall()
-    conn.close()
-    
-    for row in results:
-        user_id = row['user_id']
-        username = row['username']
-
-        # Получаем информацию о пользователе
-        try:
-            user = await context.bot.get_chat_member(chat_id, user_id)
-            user_name = user.user.first_name or user.user.username or f"ID: {user.user.id}"
-        except Exception as e:
-            logger.error(f"Ошибка при получении информации о пользователе {user_id}: {e}")
-            user_name = f"ID: {user_id}"
-
-        # Поздравляем пользователя
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"🎉{user_name} 🎊 - Поздравляю тебя с днем рождения! 🍀Желаю умножить свой cash🎁back x10 раз 🎉. _\_/_\_/_\_/_\_/_\_/_\_/_\_/_ Чтобы добавить свою дату рождения в базу, напишите /dr и дату рождения одним сообщением в формате /dr ДД.ММ.ГГГГ"
-        )
-
-        # Обновляем год последнего поздравления
-        conn = get_db_connection()
+    try:
         with conn.cursor() as cursor:
-            cursor.execute('UPDATE birthdays SET last_congratulated_year = %s WHERE user_id = %s', (current_year, user_id))
+            cursor.execute('''
+                SELECT user_id, username 
+                FROM birthdays 
+                WHERE substr(birth_date, 1, 5) = %s AND (last_congratulated_year IS NULL OR last_congratulated_year < %s)
+            ''', (today, current_year))
+            results = cursor.fetchall()
+
+        for row in results:
+            user_id = row['user_id']
+            username = row['username']
+
+            # Получаем информацию о пользователе
+            try:
+                user = await context.bot.get_chat_member(chat_id, user_id)
+                user_name = user.user.first_name or user.user.username or f"ID: {user.user.id}"
+            except Exception as e:
+                logger.error(f"Ошибка при получении информации о пользователе {user_id}: {e}")
+                user_name = f"ID: {user_id}"
+
+            # Поздравляем пользователя
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🎉{user_name} 🎊 - Поздравляю тебя с днем рождения! 🍀Желаю умножить свой cash🎁back x10 раз 🎉."
+                     f" Чтобы добавить свою дату рождения в базу, напишите /dr и дату рождения одним сообщением в формате /dr ДД.ММ.ГГГГ"
+            )
+
+            # Обновляем год последнего поздравления
+            with conn.cursor() as cursor:
+                cursor.execute('UPDATE birthdays SET last_congratulated_year = %s WHERE user_id = %s', (current_year, user_id))
         conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка при автопоздравлении: {e}")
+    finally:
         conn.close()
 
 async def druser(update: Update, context: ContextTypes.DEFAULT_TYPE):
