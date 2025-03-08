@@ -469,16 +469,21 @@ async def check_all_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def lider(update: Update, context: ContextTypes.DEFAULT_TYPE):
     days = int(context.args[0]) if context.args else 1
     conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute('''
-            SELECT user_id, username, COUNT(*) as count
-            FROM pinned_messages
-            WHERE timestamp >= %s
-            GROUP BY user_id
-            ORDER BY count DESC
-            LIMIT 3
-        ''', (int(time.time()) - days * 86400,))
-        results = cursor.fetchall()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT user_id, username, COUNT(*) as count
+                FROM pinned_messages
+                WHERE timestamp >= %s
+                GROUP BY user_id, username  -- Добавляем username в GROUP BY
+                ORDER BY count DESC
+                LIMIT 3
+            ''', (int(time.time()) - days * 86400,))
+            results = cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка при выполнении запроса к базе данных: {e}")
+        await update.message.reply_text("Произошла ошибка при получении данных.")
+        return
     conn.close()
 
     if not results:
