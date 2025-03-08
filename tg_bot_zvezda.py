@@ -369,15 +369,28 @@ async def process_duplicate_message(update: Update, context: ContextTypes.DEFAUL
         await send_thanks_message(context, chat_id)
 
 
-def save_pinned_message(chat_id: int, user_id: int, username: str, message_text: str, timestamp: int):
-    conn = get_db_connection()
-    with conn.cursor() as cursor:
-        cursor.execute('''
-            INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-            VALUES (%s, %s, %s, %s, %s)
-        ''', (chat_id, user_id, username, message_text, timestamp))
-    conn.commit()
-    conn.close()
+async def send_thanks_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    current_time = int(time.time())
+    last_thanks_time = last_thanks_times.get(chat_id, 0)
+
+    # Проверяем, прошло ли уже 3 минуты с последней благодарности
+    if current_time - last_thanks_time < 180:
+        return
+
+    # Формируем текст благодарности
+    last_user = last_user_username.get(chat_id, 'неизвестным')
+    thanks_message = await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"Спасибо за вашу бдительность! Звезда часа уже замечена пользователем "
+             f"{'@' + last_user} и закреплена в группе. "
+             f"Надеюсь, в следующий раз именно Вы станете нашей 🌟 !!!"
+    )
+
+    # Устанавливаем задачу на удаление благодарности через 3 минуты
+    context.job_queue.run_once(delete_system_message, 180, data=thanks_message.message_id, chat_id=chat_id)
+
+    # Обновляем время последней благодарности
+    last_thanks_times[chat_id] = current_time
 
 
 def save_active_user(user_id: int, username: str, current_time: int):
@@ -395,7 +408,7 @@ def save_active_user(user_id: int, username: str, current_time: int):
     conn.close()
 
 
-async def send_thanks_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user):
+async def send_thanks_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     current_time = int(time.time())
     last_thanks_time = last_thanks_times.get(chat_id, 0)
 
