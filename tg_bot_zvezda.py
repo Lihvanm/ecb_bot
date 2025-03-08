@@ -938,6 +938,95 @@ async def deban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await update.message.reply_text("Ответьте на сообщение пользователя или укажите его ID.")
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
         await update.message.delete()  # Удаляем команду
+# Команда /clean
+async def clean_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat.id
+    user = update.message.from_user
+
+    # Проверка прав администратора
+    if not await is_admin_or_musician(update, context):
+        response = await update.message.reply_text("У вас нет прав для выполнения этой команды.")
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
+        await update.message.delete()  # Удаляем команду
+        return
+
+    # Определяем количество дней для очистки
+    days = int(context.args[0]) if context.args else None
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            if days is not None:
+                # Удаляем записи старше указанного количества дней
+                cutoff_time = int(time.time()) - days * 86400
+                cursor.execute('DELETE FROM pinned_messages WHERE timestamp < %s', (cutoff_time,))
+                cursor.execute('DELETE FROM active_users WHERE timestamp < %s', (cutoff_time,))
+                cursor.execute('DELETE FROM ban_history WHERE timestamp < %s', (cutoff_time,))
+                logger.info(f"Очищена база данных за последние {days} дней.")
+                response = await update.message.reply_text(f"База данных успешно очищена за последние {days} дней.")
+            else:
+                # Полная очистка базы данных
+                cursor.execute('TRUNCATE TABLE pinned_messages RESTART IDENTITY CASCADE')
+                cursor.execute('TRUNCATE TABLE active_users RESTART IDENTITY CASCADE')
+                cursor.execute('TRUNCATE TABLE ban_history RESTART IDENTITY CASCADE')
+                logger.info("Полностью очищена база данных.")
+                response = await update.message.reply_text("База данных полностью очищена.")
+
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка при очистке базы данных: {e}")
+        response = await update.message.reply_text("Произошла ошибка при очистке базы данных.")
+    finally:
+        conn.close()
+
+    context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
+    await update.message.delete()  # Удаляем команду
+
+import os
+
+# Команда /save
+async def save_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat.id
+    user = update.message.from_user
+
+    # Проверка прав администратора
+    if not await is_admin_or_musician(update, context):
+        response = await update.message.reply_text("У вас нет прав для выполнения этой команды.")
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
+        await update.message.delete()  # Удаляем команду
+        return
+
+    db_url = os.getenv("DATABASE_URL")
+    backup_filename = "database_backup.sql"
+
+    try:
+        # Создаем бэкап базы данных
+        conn = get_db_connection()
+        with open(backup_filename, 'w') as f:
+            with conn.cursor() as cursor:
+                # Экспортируем структуру и данные всех таблиц
+                cursor.copy_expert("COPY (SELECT * FROM pinned_messages) TO STDOUT WITH CSV HEADER", f)
+                cursor.copy_expert("COPY (SELECT * FROM active_users) TO STDOUT WITH CSV HEADER", f)
+                cursor.copy_expert("COPY (SELECT * FROM birthdays) TO STDOUT WITH CSV HEADER", f)
+                cursor.copy_expert("COPY (SELECT * FROM ban_list) TO STDOUT WITH CSV HEADER", f)
+                cursor.copy_expert("COPY (SELECT * FROM ban_history) TO STDOUT WITH CSV HEADER", f)
+        conn.close()
+
+        # Отправляем файл бэкапа в чат
+        with open(backup_filename, 'rb') as f:
+            await context.bot.send_document(chat_id=chat_id, document=f, filename=backup_filename)
+
+        # Удаляем временный файл после отправки
+        os.remove(backup_filename)
+
+        logger.info("Создан бэкап базы данных.")
+        response = await update.message.reply_text("Бэкап базы данных создан и отправлен.")
+    except Exception as e:
+        logger.error(f"Ошибка при создании бэкапа базы данных: {e}")
+        response = await update.message.reply_text("Произошла ошибка при создании бэкапа базы данных.")
+    finally:
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
+        await update.message.delete()  # Удаляем команду
 
 def load_banned_users():
     global banned_users
@@ -956,6 +1045,9 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue  # Инициализация JobQueue
 
+     # Добавляем новые команды
+    application.add_handler(CommandHandler("clean", clean_database))
+    application.add_handler(CommandHandler("save", save_backup))
     application.add_handler(CommandHandler("timer", reset_pin_timer))
     application.add_handler(CommandHandler("del", delete_message))
     application.add_handler(CommandHandler("lider", lider))
