@@ -254,7 +254,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = message.text
     current_time = int(time.time())
 
-    # Проверка на бан в базе бота
+    # Проверка на бан
     if user.id in banned_users:
         try:
             await message.delete()
@@ -262,33 +262,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Ошибка удаления: {e}")
         return
 
+    # Игнорируем сообщения из целевой группы
+    if chat_id == TARGET_GROUP_ID:
+        return
+
+    # Проверка типа чата
     if message.chat.type not in ['group', 'supergroup']:
         return
 
+    # Проверка ключевых слов
     if not text.lower().startswith(("звезда", "зч")) and "🌟" not in text:
         return
 
-    # Проверка на антимат и антирекламу
+    # Проверка антимата и антирекламы
     if not await is_admin_or_musician(update, context):
-        if any(word in text.lower() for word in BANNED_WORDS):
+        if any(word in text.lower() for word in BANNED_WORDS) or \
+           any(re.search(rf"\b{re.escape(keyword)}\b", text.lower()) for keyword in MESSENGER_KEYWORDS):
             await message.delete()
             warning_message = await context.bot.send_message(
                 chat_id=chat_id,
-                text="Использование нецензурных выражений недопустимо!"
+                text="Использование нецензурных выражений или ссылок недопустимо!"
             )
             context.job_queue.run_once(delete_system_message, 10, data=warning_message.message_id, chat_id=chat_id)
             return
 
-        if any(re.search(rf"\b{re.escape(keyword)}\b", text.lower()) for keyword in MESSENGER_KEYWORDS):
-            await message.delete()
-            warning_message = await context.bot.send_message(
-                chat_id=chat_id,
-                text="Отправка ссылок и упоминаний мессенджеров недопустима!"
-            )
-            context.job_queue.run_once(delete_system_message, 10, data=warning_message.message_id, chat_id=chat_id)
-            return
-
-    # Проверка наличия закрепленного сообщения в группе
+    # Получение информации о закрепленном сообщении
     try:
         chat = await context.bot.get_chat(chat_id)
         pinned_message = chat.pinned_message
@@ -296,146 +294,88 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка при получении информации о закрепленном сообщении: {e}")
         pinned_message = None
 
-    # Если закрепленного сообщения нет, разрешаем закрепление
+    # Обработка закрепления
     if pinned_message is None:
-        try:
-            await message.pin()
-            last_pinned_times[chat_id] = current_time
-            last_user_username[chat_id] = user.username if user.username else None
-
-            conn = get_db_connection()
-            with conn.cursor() as cursor:
-                cursor.execute('''
-                INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-                VALUES (%s, %s, %s, %s, %s)
-            ''', (chat_id, user.id, user.username, text, current_time))
-            conn.commit()
-            conn.close()
-
-            # Автопоздравление именинников
-            await auto_birthdays(context, chat_id)
-            context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
-
-            if chat_id != TARGET_GROUP_ID:
-                new_text = text.replace("🌟 ", "").strip()
-                forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
-                await forwarded_message.pin()
-        except Exception as e:
-            logger.error(f"Ошибка при закреплении сообщения: {e}")
-        return
-
-    last_pinned_time = last_pinned_times.get(chat_id, 0)
-    if current_time - last_pinned_time < PINNED_DURATION:
-        if not await is_admin_or_musician(update, context):
-            await message.delete()
-
-            # Сохраняем информацию о удаленном сообщении
-            conn = get_db_connection()
-            with conn.cursor() as cursor:
-                cursor.execute('SELECT id FROM active_users WHERE user_id = %s', (user.id,))
-                result = cursor.fetchone()
-
-            if result:
-                cursor.execute('UPDATE active_users SET delete_count = delete_count + 1 WHERE user_id = %s', (user.id,))
-            else:
-                cursor.execute('INSERT INTO active_users (user_id, username, delete_count, timestamp) VALUES (%s, %s, %s, %s)',
-                               (user.id, user.username, 1, current_time))
-            conn.commit()
-
-            # Отправляем благодарность за повторное сообщение
-            if current_time - last_pinned_time < 180:
-                last_thanks_time = last_thanks_times.get(chat_id, 0)
-                if current_time - last_thanks_time >= 180:
-                    thanks_message = await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"Спасибо за вашу бдительность! Звезда часа уже замечена пользователем "
-                             f"{'@' + last_user_username.get(chat_id, 'неизвестным')} и закреплена в группе. "
-                             f"Надеюсь, в следующий раз именно Вы станете нашей 🌟 !!!"
-                    )
-                    context.job_queue.run_once(delete_system_message, 180, data=thanks_message.message_id, chat_id=chat_id)
-                    last_thanks_times[chat_id] = current_time
-            return
-        else:
-            try:
-                await message.pin()
-                last_pinned_times[chat_id] = current_time
-                last_user_username[chat_id] = user.username if user.username else None
-
-                conn = get_db_connection()
-    
-                with conn.cursor() as cursor:
-                    cursor.execute('''
-                    INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-                    VALUES (%s, %s, %s, %s, %s)
-                ''', (chat_id, user.id, user.username, text, current_time))
-                conn.commit()
+        await process_new_pinned_message(update, context, chat_id, user, text, current_time)
+    elif current_time - last_pinned_times.get(chat_id, 0) < PINNED_DURATION:
+        await process_duplicate_message(update, context, chat_id, user, text, current_time)
+    else:
+        await process_new_pinned_message(update, context, chat_id, user, text, current_time)
 
 
-                correction_message = await context.bot.send_message(
-                    chat_id=chat_id,
-                    text="Корректировка звезды часа от Админа."
-                )
-                context.job_queue.run_once(delete_system_message, 10, data=correction_message.message_id, chat_id=chat_id)
-            except Exception as e:
-                logger.error(f"Ошибка при закреплении сообщения: {e}")
-            return
-
-    # Если время закрепления истекло, закрепляем сообщение
+async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
     try:
-        await message.pin()
+        await update.message.pin()
         last_pinned_times[chat_id] = current_time
         last_user_username[chat_id] = user.username if user.username else None
 
-        conn = get_db_connection()
-        with conn.cursor() as cursor:
-            cursor.execute('''
-            INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
-            VALUES (%s, %s, %s, %s, %s)
-        ''', (chat_id, user.id, user.username, text, current_time))
-        conn.commit()
-
+        # Сохраняем информацию о закрепленном сообщении
+        save_pinned_message(chat_id, user.id, user.username, text, current_time)
 
         # Автопоздравление именинников
         await auto_birthdays(context, chat_id)
 
-        context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
-
+        # Пересылаем сообщение в целевую группу
         if chat_id != TARGET_GROUP_ID:
             new_text = text.replace("🌟 ", "").strip()
             forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
             await forwarded_message.pin()
+
+        # Устанавливаем задачу на открепление сообщения
+        context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
     except Exception as e:
-        logger.error(f"Ошибка при закреплении сообщения: {e}")
+        logger.error(f"Ошибка при закреплении нового сообщения: {e}")
 
-    # Если время закрепления истекло, закрепляем новое сообщение
-    try:
-        await message.pin()
-        last_pinned_times[chat_id] = current_time
-        last_user_username[chat_id] = user.username if user.username else None
 
-        conn = get_db_connection()
-        with conn.cursor() as cursor:
-            cursor.execute('''
+async def process_duplicate_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
+    if not await is_admin_or_musician(update, context):
+        await update.message.delete()
+
+        # Сохраняем информацию о удаленном сообщении
+        save_active_user(user.id, user.username, current_time)
+
+        # Отправляем благодарность
+        await send_thanks_message(context, chat_id)
+
+
+def save_pinned_message(chat_id: int, user_id: int, username: str, message_text: str, timestamp: int):
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        cursor.execute('''
             INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
             VALUES (%s, %s, %s, %s, %s)
-        ''', (chat_id, user.id, user.username, text, current_time))
-        conn.commit()
+        ''', (chat_id, user_id, username, message_text, timestamp))
+    conn.commit()
+    conn.close()
 
-        # Пересылка сообщения в целевую группу
-        if chat_id != TARGET_GROUP_ID:
-            try:
-                new_text = text.replace("🌟 ", "").strip()
-                forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
-                await forwarded_message.pin()
-            except Exception as e:
-                logger.error(f"Ошибка при пересылке сообщения в целевую группу: {e}")
 
-        # Автопоздравление именинников
-        await auto_birthdays(context, chat_id)
-        context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
-        
-    except Exception as e:
-        logger.error(f"Ошибка при закреплении сообщения: {e}")
+def save_active_user(user_id: int, username: str, current_time: int):
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT id FROM active_users WHERE user_id = %s', (user_id,))
+        result = cursor.fetchone()
+        if result:
+            cursor.execute('UPDATE active_users SET delete_count = delete_count + 1, timestamp = %s WHERE user_id = %s',
+                           (current_time, user_id))
+        else:
+            cursor.execute('INSERT INTO active_users (user_id, username, delete_count, timestamp) VALUES (%s, %s, %s, %s)',
+                           (user_id, username, 1, current_time))
+    conn.commit()
+    conn.close()
+
+
+async def send_thanks_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    current_time = int(time.time())
+    if current_time - last_pinned_times.get(chat_id, 0) < 180 and \
+       current_time - last_thanks_times.get(chat_id, 0) >= 180:
+        last_thanks_times[chat_id] = current_time
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Спасибо за вашу бдительность! Звезда часа уже замечена пользователем "
+                 f"{'@' + last_user_username.get(chat_id, 'неизвестным')} и закреплена в группе. "
+                 f"Надеюсь, в следующий раз именно Вы станете нашей 🌟 !!!"
+        )
+        context.job_queue.run_once(delete_system_message, 180, data=response.message_id, chat_id=chat_id)
     
 async def check_all_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db_connection()
