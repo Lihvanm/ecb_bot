@@ -138,14 +138,13 @@ async def is_admin_or_musician(update: Update, context: ContextTypes.DEFAULT_TYP
     return False
 
 
-# Удаление системных сообщений через указанное время
+# удаление сист сообщ
 async def delete_system_message(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     try:
         await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data)
     except Exception as e:
         logger.error(f"Ошибка при удалении системного сообщения: {e}")
-
 
 # Команда /reset_pin_timer
 async def reset_pin_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -254,7 +253,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = message.text
     current_time = int(time.time())
 
-    # Проверка на бан
+    # Проверка на бан в базе бота
     if user.id in banned_users:
         try:
             await message.delete()
@@ -266,27 +265,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id == TARGET_GROUP_ID:
         return
 
-    # Проверка типа чата
     if message.chat.type not in ['group', 'supergroup']:
         return
 
-    # Проверка ключевых слов
     if not text.lower().startswith(("звезда", "зч")) and "🌟" not in text:
         return
 
-    # Проверка антимата и антирекламы
+    # Проверка на антимат и антирекламу
     if not await is_admin_or_musician(update, context):
-        if any(word in text.lower() for word in BANNED_WORDS) or \
-           any(re.search(rf"\b{re.escape(keyword)}\b", text.lower()) for keyword in MESSENGER_KEYWORDS):
+        if any(word in text.lower() for word in BANNED_WORDS):
             await message.delete()
             warning_message = await context.bot.send_message(
                 chat_id=chat_id,
-                text="Использование нецензурных выражений или ссылок недопустимо!"
+                text="Использование нецензурных выражений недопустимо!"
+            )
+            context.job_queue.run_once(delete_system_message, 10, data=warning_message.message_id, chat_id=chat_id)
+            return
+        if any(re.search(rf"\b{re.escape(keyword)}\b", text.lower()) for keyword in MESSENGER_KEYWORDS):
+            await message.delete()
+            warning_message = await context.bot.send_message(
+                chat_id=chat_id,
+                text="Отправка ссылок и упоминаний мессенджеров недопустима!"
             )
             context.job_queue.run_once(delete_system_message, 10, data=warning_message.message_id, chat_id=chat_id)
             return
 
-    # Получение информации о закрепленном сообщении
+    # Проверка наличия закрепленного сообщения в группе
     try:
         chat = await context.bot.get_chat(chat_id)
         pinned_message = chat.pinned_message
@@ -294,13 +298,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка при получении информации о закрепленном сообщении: {e}")
         pinned_message = None
 
-    # Обработка закрепления
+    # Если закрепленного сообщения нет, разрешаем закрепление
     if pinned_message is None:
-        await process_new_pinned_message(update, context, chat_id, user, text, current_time)
-    elif current_time - last_pinned_times.get(chat_id, 0) < PINNED_DURATION:
-        await process_duplicate_message(update, context, chat_id, user, text, current_time)
-    else:
-        await process_new_pinned_message(update, context, chat_id, user, text, current_time)
+        try:
+            await message.pin()
+            last_pinned_times[chat_id] = current_time
+            last_user_username[chat_id] = user.username if user.username else None
+
+            # Сохраняем информацию о закрепленном сообщении
+            save_pinned_message(chat_id, user.id, user.username, text, current_time)
+
+            # Автопоздравление именинников
+            await auto_birthdays(context, chat_id)
+
+            # Пересылаем сообщение в целевую группу
+            if chat_id != TARGET_GROUP_ID:
+                new_text = text.replace("🌟 ", "").strip()
+                forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
+                await forwarded_message.pin()
+
+            # Устанавливаем задачу на открепление сообщения через указанное время
+            context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
+        except Exception as e:
+            logger.error(f"Ошибка при закреплении сообщения: {e}")
+        return
+
+    # Если закрепленное сообщение уже есть
+    if not await is_admin_or_musician(update, context):
+        await message.delete()
+
+        # Сохраняем информацию о удаленном сообщении
+        save_active_user(user.id, user.username, current_time)
+
+        # Отправляем благодарность за повторное сообщение
+        await send_thanks_message(context, chat_id, user)
 
 
 async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
@@ -364,18 +395,28 @@ def save_active_user(user_id: int, username: str, current_time: int):
     conn.close()
 
 
-async def send_thanks_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+async def send_thanks_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user):
     current_time = int(time.time())
-    if current_time - last_pinned_times.get(chat_id, 0) < 180 and \
-       current_time - last_thanks_times.get(chat_id, 0) >= 180:
-        last_thanks_times[chat_id] = current_time
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"Спасибо за вашу бдительность! Звезда часа уже замечена пользователем "
-                 f"{'@' + last_user_username.get(chat_id, 'неизвестным')} и закреплена в группе. "
-                 f"Надеюсь, в следующий раз именно Вы станете нашей 🌟 !!!"
-        )
-        context.job_queue.run_once(delete_system_message, 180, data=response.message_id, chat_id=chat_id)
+    last_thanks_time = last_thanks_times.get(chat_id, 0)
+
+    # Проверяем, прошло ли уже 3 минуты с последней благодарности
+    if current_time - last_thanks_time < 180:
+        return
+
+    # Формируем текст благодарности
+    last_user = last_user_username.get(chat_id, 'неизвестным')
+    thanks_message = await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"Спасибо за вашу бдительность! Звезда часа уже замечена пользователем "
+             f"{'@' + last_user} и закреплена в группе. "
+             f"Надеюсь, в следующий раз именно Вы станете нашей 🌟 !!!"
+    )
+
+    # Устанавливаем задачу на удаление благодарности через 3 минуты
+    context.job_queue.run_once(delete_system_message, 180, data=thanks_message.message_id, chat_id=chat_id)
+
+    # Обновляем время последней благодарности
+    last_thanks_times[chat_id] = current_time
     
 async def check_all_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db_connection()
