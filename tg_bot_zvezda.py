@@ -261,10 +261,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Ошибка удаления: {e}")
         return
 
-    # Игнорируем сообщения из целевой группы
-    if chat_id == TARGET_GROUP_ID:
-        return
-
     if message.chat.type not in ['group', 'supergroup']:
         return
 
@@ -300,39 +296,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Если закрепленного сообщения нет, разрешаем закрепление
     if pinned_message is None:
-        try:
-            await message.pin()
-            last_pinned_times[chat_id] = current_time
-            last_user_username[chat_id] = user.username if user.username else None
-
-            # Сохраняем информацию о закрепленном сообщении
-            save_pinned_message(chat_id, user.id, user.username, text, current_time)
-
-            # Автопоздравление именинников
-            await auto_birthdays(context, chat_id)
-
-            # Пересылаем сообщение в целевую группу
-            if chat_id != TARGET_GROUP_ID:
-                new_text = text.replace("🌟 ", "").strip()
-                forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
-                await forwarded_message.pin()
-
-            # Устанавливаем задачу на открепление сообщения через указанное время
-            context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
-        except Exception as e:
-            logger.error(f"Ошибка при закреплении сообщения: {e}")
+        await process_new_pinned_message(update, context, chat_id, user, text, current_time)
         return
 
     # Если закрепленное сообщение уже есть
-    if not await is_admin_or_musician(update, context):
-        await message.delete()
+    last_pinned_time = last_pinned_times.get(chat_id, 0)
+    if current_time - last_pinned_time < PINNED_DURATION:
+        if not await is_admin_or_musician(update, context):
+            await process_duplicate_message(update, context, chat_id, user, text, current_time)
+        else:
+            # Корректировка закрепа от админа
+            await process_new_pinned_message(update, context, chat_id, user, text, current_time)
+        return
 
-        # Сохраняем информацию о удаленном сообщении
-        save_active_user(user.id, user.username, current_time)
+    # Если время закрепления истекло, закрепляем новое сообщение
+    await process_new_pinned_message(update, context, chat_id, user, text, current_time)
 
-        # Отправляем благодарность за повторное сообщение
-        await send_thanks_message(context, chat_id, user)
-
+def save_pinned_message(chat_id: int, user_id: int, username: str, message_text: str, timestamp: int):
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        cursor.execute('''
+            INSERT INTO pinned_messages (chat_id, user_id, username, message_text, timestamp)
+            VALUES (%s, %s, %s, %s, %s)
+        ''', (chat_id, user_id, username, message_text, timestamp))
+    conn.commit()
+    conn.close()
 
 async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
     try:
@@ -352,24 +340,35 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
             forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
             await forwarded_message.pin()
 
-        # Устанавливаем задачу на открепление сообщения
+        # Устанавливаем задачу на открепление сообщения через указанное время
         context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
+
+        # Отправляем корректирующее сообщение, если это админ
+        if await is_admin_or_musician(update, context):
+            correction_message = await context.bot.send_message(
+                chat_id=chat_id,
+                text="Корректировка звезды часа от Админа."
+            )
+            context.job_queue.run_once(delete_system_message, 10, data=correction_message.message_id, chat_id=chat_id)
+
     except Exception as e:
         logger.error(f"Ошибка при закреплении нового сообщения: {e}")
 
 
 async def process_duplicate_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
-    if not await is_admin_or_musician(update, context):
+    try:
         await update.message.delete()
 
         # Сохраняем информацию о удаленном сообщении
         save_active_user(user.id, user.username, current_time)
 
-        # Отправляем благодарность
-        await send_thanks_message(context, chat_id)
+        # Отправляем благодарность за повторное сообщение
+        await send_thanks_message(context, chat_id, user)
+    except Exception as e:
+        logger.error(f"Ошибка при обработке повторного сообщения: {e}")
 
 
-async def send_thanks_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+async def send_thanks_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user):
     current_time = int(time.time())
     last_thanks_time = last_thanks_times.get(chat_id, 0)
 
