@@ -169,6 +169,14 @@ async def reset_pin_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.job_queue.run_once(delete_system_message, 10, data=success_message.message_id, chat_id=chat_id)
     await update.message.delete()  # Удаляем команду
 
+async def unpin_all_messages(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = context.job.chat_id
+    try:
+        await context.bot.unpin_all_chat_messages(chat_id=chat_id)
+        logger.info(f"Все сообщения откреплены в группе {chat_id}.")
+    except Exception as e:
+        logger.error(f"Ошибка при откреплении всех сообщений в группе {chat_id}: {e}")
+
 # Функция для добавления нарушителей в банлист_ХИСТОРИ:
 async def add_to_ban_history(user_id: int, username: str, reason: str):
     conn = get_db_connection()
@@ -267,7 +275,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text.lower().startswith(("звезда", "зч")) and "🌟" not in text:
         return
 
-    # Проверка на антимат и антирекламу
+    # Проверка на антимат и антирекламу для обычных пользователей
     if not await is_admin_or_musician(update, context):
         if any(word in text.lower() for word in BANNED_WORDS):
             await message.delete()
@@ -277,6 +285,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             context.job_queue.run_once(delete_system_message, 10, data=warning_message.message_id, chat_id=chat_id)
             return
+
         if any(re.search(rf"\b{re.escape(keyword)}\b", text.lower()) for keyword in MESSENGER_KEYWORDS):
             await message.delete()
             warning_message = await context.bot.send_message(
@@ -324,6 +333,7 @@ def save_pinned_message(chat_id: int, user_id: int, username: str, message_text:
 
 async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
     try:
+        # Закрепляем новое сообщение
         await update.message.pin()
         last_pinned_times[chat_id] = current_time
         last_user_username[chat_id] = user.username if user.username else None
@@ -340,8 +350,8 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
             forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
             await forwarded_message.pin()
 
-        # Устанавливаем задачу на открепление сообщения через указанное время
-        context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
+        # Устанавливаем задачу на открепление всех сообщений через 45 минут
+        context.job_queue.run_once(unpin_all_messages, PINNED_DURATION, chat_id=chat_id)
 
         # Отправляем корректирующее сообщение, если это админ
         if await is_admin_or_musician(update, context):
