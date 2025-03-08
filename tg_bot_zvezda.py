@@ -13,6 +13,7 @@ import re
 import psycopg2
 import os
 from datetime import datetime, timedelta  # Добавьте timedelta в импорт
+from psycopg2.extras import DictCursor
 
 # Настройка логирования
 logging.basicConfig(
@@ -469,21 +470,16 @@ async def check_all_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def lider(update: Update, context: ContextTypes.DEFAULT_TYPE):
     days = int(context.args[0]) if context.args else 1
     conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute('''
-                SELECT user_id, username, COUNT(*) as count
-                FROM pinned_messages
-                WHERE timestamp >= %s
-                GROUP BY user_id, username  -- Добавляем username в GROUP BY
-                ORDER BY count DESC
-                LIMIT 3
-            ''', (int(time.time()) - days * 86400,))
-            results = cursor.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка при выполнении запроса к базе данных: {e}")
-        await update.message.reply_text("Произошла ошибка при получении данных.")
-        return
+    with conn.cursor() as cursor:
+        cursor.execute('''
+            SELECT user_id, username, COUNT(*) as count
+            FROM pinned_messages
+            WHERE timestamp >= %s
+            GROUP BY user_id, username
+            ORDER BY count DESC
+            LIMIT 3
+        ''', (int(time.time()) - days * 86400,))
+        results = cursor.fetchall()
     conn.close()
 
     if not results:
@@ -495,7 +491,6 @@ async def lider(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"Топ участников за - {days} д.:\n"
     for i, row in enumerate(results, start=1):
         text += f"{i}. @{row['username']} — {row['count']} 🌟\n"
-
     await update.message.reply_text(text)
     await update.message.delete()  # Удаляем команду
 
