@@ -301,12 +301,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Если закрепленное сообщение уже есть
     last_pinned_time = last_pinned_times.get(chat_id, 0)
+
+    # Проверяем, истекло ли время закрепления
     if current_time - last_pinned_time < PINNED_DURATION:
         if not await is_admin_or_musician(update, context):
+            # Обычный пользователь пытается закрепить сообщение
             await process_duplicate_message(update, context, chat_id, user, text, current_time)
         else:
-            # Корректировка закрепа от админа
+            # Администратор корректирует закрепленное сообщение
             await process_new_pinned_message(update, context, chat_id, user, text, current_time)
+            await send_correction_message(update, context, chat_id)
         return
 
     # Если время закрепления истекло, закрепляем новое сообщение
@@ -342,19 +346,10 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # Устанавливаем задачу на открепление сообщения через указанное время
         context.job_queue.run_once(unpin_last_message, PINNED_DURATION, chat_id=chat_id)
-
-        # Отправляем корректирующее сообщение, если это админ
-        if await is_admin_or_musician(update, context):
-            correction_message = await context.bot.send_message(
-                chat_id=chat_id,
-                text="Корректировка звезды часа от Админа."
-            )
-            context.job_queue.run_once(delete_system_message, 10, data=correction_message.message_id, chat_id=chat_id)
-
     except Exception as e:
         logger.error(f"Ошибка при закреплении нового сообщения: {e}")
 
-
+# обрабатывает повторные сообщения от обычных пользователей.
 async def process_duplicate_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
     try:
         await update.message.delete()
@@ -367,7 +362,7 @@ async def process_duplicate_message(update: Update, context: ContextTypes.DEFAUL
     except Exception as e:
         logger.error(f"Ошибка при обработке повторного сообщения: {e}")
 
-
+# благодарности
 async def send_thanks_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user):
     current_time = int(time.time())
     last_thanks_time = last_thanks_times.get(chat_id, 0)
@@ -448,6 +443,18 @@ async def check_all_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE
         text += f"• @{row['username']} — {row['birth_date']}\n"
     await update.message.reply_text(text)
     await update.message.delete()
+
+async def send_correction_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    try:
+        correction_message = await context.bot.send_message(
+            chat_id=chat_id,
+            text="Корректировка звезды часа от Админа."
+        )
+
+        # Устанавливаем задачу на удаление сообщения через 10 секунд
+        context.job_queue.run_once(delete_system_message, 10, data=correction_message.message_id, chat_id=chat_id)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке сообщения о корректировке: {e}")
 
 # Команда /liderX
 async def lider(update: Update, context: ContextTypes.DEFAULT_TYPE):
