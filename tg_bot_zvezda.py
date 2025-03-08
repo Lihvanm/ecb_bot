@@ -61,7 +61,7 @@ banned_users = set()
 # База данных
 def get_db_connection():
     db_url = os.getenv("DATABASE_URL", "dbname=bot_database user=postgres")
-    return psycopg2.connect(db_url)
+    return psycopg2.connect(db_url, cursor_factory=DictCursor)
 
 
 def init_db():
@@ -183,20 +183,13 @@ async def add_to_ban_history(user_id: int, username: str, reason: str):
 
 # Команда /ban_history:
 async def ban_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat.id
-    user = update.message.from_user
-
-    # Проверка прав администратора или музыканта
     if not await is_admin_or_musician(update, context):
         response = await update.message.reply_text("У вас нет прав для выполнения этой команды.")
-        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
-        await update.message.delete()  # Удаляем команду
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
+        await update.message.delete()
         return
 
-    # Получаем период из аргументов команды
     days = int(context.args[0]) if context.args else 1
-
-    # Получаем данные из базы
     conn = get_db_connection()
     with conn.cursor() as cursor:
         cursor.execute('''
@@ -209,11 +202,10 @@ async def ban_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not results:
         response = await update.message.reply_text(f"Нет нарушителей за последние {days} дней.")
-        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
-        await update.message.delete()  # Удаляем команду
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
+        await update.message.delete()
         return
 
-    # Формируем сообщение
     text = f"Нарушители за последние {days} дней:\n"
     for idx, row in enumerate(results, start=1):
         text += (
@@ -222,10 +214,9 @@ async def ban_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Причина: {row['reason']} | "
             f"Дата: {datetime.fromtimestamp(row['timestamp']).strftime('%d.%m.%Y %H:%M')}\n"
         )
-
     await update.message.reply_text(text)
-    context.job_queue.run_once(delete_system_message, 60, data=response.message_id, chat_id=chat_id)
-    await update.message.delete()  # Удаляем команду
+    context.job_queue.run_once(delete_system_message, 60, data=response.message_id, chat_id=update.message.chat.id)
+    await update.message.delete()
 
 # Команда /del
 async def delete_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -451,7 +442,7 @@ async def check_all_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE
     with conn.cursor() as cursor:
         cursor.execute('SELECT user_id, username, birth_date FROM birthdays')
         results = cursor.fetchall()
-        conn.close()
+    conn.close()
 
     if not results:
         response = await update.message.reply_text("В базе данных нет записей о днях рождения.")
@@ -462,7 +453,6 @@ async def check_all_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = "Все дни рождения:\n"
     for row in results:
         text += f"• @{row['username']} — {row['birth_date']}\n"
-
     await update.message.reply_text(text)
     await update.message.delete()
 
@@ -511,15 +501,14 @@ async def zh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not results:
         await update.message.reply_text("Нет закрепленных сообщений.")
-        await update.message.delete()  # Удаляем команду
+        await update.message.delete()
         return
 
     text = f"Последние {count} ⭐️🕐:\n"
     for i, row in enumerate(results, start=1):
         text += f"{i}. @{row['username']}: {row['message_text']}\n"
-
     await update.message.reply_text(text)
-    await update.message.delete()  # Удаляем команду
+    await update.message.delete()
 
 
 # Команда /activeX
@@ -531,7 +520,7 @@ async def active(update: Update, context: ContextTypes.DEFAULT_TYPE):
             SELECT user_id, username, SUM(delete_count) as total_deletes
             FROM active_users
             WHERE timestamp >= %s
-            GROUP BY user_id
+            GROUP BY user_id, username
             ORDER BY total_deletes DESC
             LIMIT 3
         ''', (int(time.time()) - days * 86400,))
@@ -541,15 +530,14 @@ async def active(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not results:
         response = await update.message.reply_text("Нет активных пользователей за указанный период.")
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
-        await update.message.delete()  # Удаляем команду
+        await update.message.delete()
         return
 
     text = f"Самые активные пользователи за период - {days} д.:\n"
     for i, row in enumerate(results, start=1):
-        text += f"{i}. @{row['username']} — {row['total_deletes']} раз(а) написал(а)⭐🕐\n"
-
+        text += f"{i}. @{row['username']} — {row['total_deletes']} раз(а) написал(а)⭐\n"
     await update.message.reply_text(text)
-    await update.message.delete()  # Удаляем команду
+    await update.message.delete()
 
 
 # Команда /dr
@@ -655,38 +643,34 @@ async def druser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
     user = update.message.from_user
 
-    # Проверка прав администратора или музыканта
     if not await is_admin_or_musician(update, context):
         response = await update.message.reply_text("У вас нет прав для выполнения этой команды.")
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
-        await update.message.delete()  # Удаляем команду
+        await update.message.delete()
         return
 
-    # Проверка, является ли команда ответом на сообщение
     if update.message.reply_to_message:
         target_user = update.message.reply_to_message.from_user
         user_id = target_user.id
         username = target_user.username or f"ID: {target_user.id}"
         birth_date = " ".join(context.args) if context.args else None
     else:
-        # Если команда не является ответом на сообщение, обрабатываем как обычно
         if not context.args or len(context.args) < 2:
             response = await update.message.reply_text(
                 "Используйте команду в формате: /druser @username dd.mm.yyyy, /druser ID dd.mm.yyyy или ответьте на сообщение пользователя с командой /druser dd.mm.yyyy"
             )
             context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
-            await update.message.delete()  # Удаляем команду
+            await update.message.delete()
             return
 
-        user_identifier = context.args[0]  # @username или ID
-        birth_date = context.args[1]  # Дата рождения
+        user_identifier = context.args[0]
+        birth_date = context.args[1]
 
-        # Получаем user_id
         user_id = None
         username = None
 
-        if user_identifier.startswith("@"):  # Если указан @username
-            username = user_identifier[1:]  # Убираем @
+        if user_identifier.startswith("@"):
+            username = user_identifier[1:]
             conn = get_db_connection()
             with conn.cursor() as cursor:
                 cursor.execute('SELECT user_id FROM birthdays WHERE username = %s', (username,))
@@ -695,7 +679,6 @@ async def druser(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_id = result['user_id']
             conn.close()
 
-            # Если user_id не найден в базе, пытаемся получить его через get_chat_member
             if not user_id:
                 try:
                     chat_member = await context.bot.get_chat_member(chat_id, username)
@@ -705,37 +688,36 @@ async def druser(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.error(f"Ошибка при получении информации о пользователе {username}: {e}")
                     response = await update.message.reply_text(f"Пользователь @{username} не найден.")
                     context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
-                    await update.message.delete()  # Удаляем команду
+                    await update.message.delete()
                     return
-        else:  # Если указан ID
+        else:
             try:
                 user_id = int(user_identifier)
             except ValueError:
                 response = await update.message.reply_text("Неверный формат ID. Используйте числовой ID.")
                 context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
-                await update.message.delete()  # Удаляем команду
+                await update.message.delete()
                 return
 
-    # Проверка формата даты
     if not birth_date or not re.match(r"\d{2}\.\d{2}\.\d{4}", birth_date):
         response = await update.message.reply_text("Неверный формат даты. Используйте ДД.ММ.ГГГГ.")
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
-        await update.message.delete()  # Удаляем команду
+        await update.message.delete()
         return
 
-    # Сохраняем дату рождения в базу данных
     conn = get_db_connection()
-    
     with conn.cursor() as cursor:
         cursor.execute('''
-        INSERT OR REPLACE INTO birthdays (user_id, username, birth_date, last_congratulated_year)
-        VALUES (%s, %s, %s, %s)
-    ''', (user_id, username, birth_date, 0))  # 0 означает, что пользователь еще не был поздравлен
+            INSERT INTO birthdays (user_id, username, birth_date, last_congratulated_year)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET birth_date = EXCLUDED.birth_date, last_congratulated_year = EXCLUDED.last_congratulated_year
+        ''', (user_id, username, birth_date, 0))
     conn.commit()
+    conn.close()
 
     response = await update.message.reply_text(f"Дата рождения для пользователя {username or f'ID: {user_id}'} сохранена: {birth_date}")
     context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
-    await update.message.delete()  # Удаляем команду
+    await update.message.delete()
 
 async def get_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
@@ -779,17 +761,15 @@ async def ban_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not results:
         response = await update.message.reply_text("Бан-лист пуст.")
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
-        await update.message.delete()  # Удаляем команду
+        await update.message.delete()
         return
 
     text = "Бан-лист:\n"
     for idx, row in enumerate(results, start=1):
         text += f"{idx}. ID: {row['user_id']} | Username: @{row['username']}\n"
-
-    
     response = await update.message.reply_text(text)
     context.job_queue.run_once(delete_system_message, 60, data=response.message_id, chat_id=update.message.chat.id)
-    await update.message.delete()  # Удаляем команду
+    await update.message.delete()
 
 
 # Команда /ban
