@@ -866,7 +866,8 @@ async def druser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
     await update.message.delete()
 
-async def get_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# id пользователя или чата
+async def get_user_or_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
     user = update.message.from_user
 
@@ -877,25 +878,30 @@ async def get_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.delete()  # Удаляем команду
         return
 
-    # Проверка, является ли команда ответом на сообщение
-    if not update.message.reply_to_message:
-        response = await update.message.reply_text("Ответьте на сообщение пользователя, чтобы узнать его ID.")
-        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
-        await update.message.delete()  # Удаляем команду
-        return
+    # Если команда отправлена в ответ на сообщение пользователя
+    if update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+        user_id = target_user.id
+        username = target_user.username or "без username"
+        first_name = target_user.first_name or "без имени"
 
-    # Получаем информацию о пользователе
-    target_user = update.message.reply_to_message.from_user
-    user_id = target_user.id
-    username = target_user.username or "без username"
-    first_name = target_user.first_name or "без имени"
+        # Отправляем ID пользователя
+        response = await update.message.reply_text(
+            f"ID пользователя {first_name} (@{username}): {user_id}"
+        )
+    else:
+        # Если команда отправлена просто в чат, возвращаем ID чата
+        response = await update.message.reply_text(f"ID текущего чата: {chat_id}")
 
-    # Отправляем ID пользователя
-    response = await update.message.reply_text(
-        f"ID пользователя {first_name} (@{username}): {user_id}"
-    )
+    # Устанавливаем задачу на удаление ответного сообщения через 10 секунд
     context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
-    await update.message.delete()  # Удаляем команду
+
+    # Удаляем команду /id
+    await update.message.delete()
+
+    # Логируем действие
+    logger.info(f"Пользователь {user.id} запросил ID чата {chat_id}.")
+
 
 # Команда /ban_list
 async def ban_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1195,7 +1201,7 @@ def main():
     application.add_handler(CommandHandler("active", active))
     application.add_handler(CommandHandler("dr", dr))
     application.add_handler(CommandHandler("druser", druser))  # Добавляем команду /druser
-    application.add_handler(CommandHandler("id", get_user_id))  # Добавляем команду /id
+    application.add_handler(CommandHandler("id", get_user_or_chat_id))
     application.add_handler(CommandHandler("birthday", birthday))
     application.add_handler(CommandHandler("check_birthdays", check_all_birthdays))
     application.add_handler(CommandHandler("ban_list", ban_list))
