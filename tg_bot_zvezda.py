@@ -152,7 +152,7 @@ async def is_admin_or_musician(update: Update, context: ContextTypes.DEFAULT_TYP
         if chat_member.status in ["administrator", "creator"]:
             return True
     except Exception as e:
-        logger.error(f"Ошибка при проверке прав пользователя {user.id}: {e}")
+        logger.error(f"Ошибка при проверке прав пользователя {user_id}: {e}")
 
     # Проверяем специальное разрешение через ALLOWED_USER
     if update.message.from_user.username == ALLOWED_USER[1:]:
