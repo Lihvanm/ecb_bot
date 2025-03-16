@@ -12,6 +12,8 @@ import time
 import re
 import psycopg2
 import os
+from bs4 import BeautifulSoup
+import requests
 from datetime import datetime, timedelta  # Добавьте timedelta в импорт
 from psycopg2.extras import DictCursor
 
@@ -22,11 +24,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Функция для очистки текста
+def clean_text(text: str) -> str:
+    if not text:
+        return ""
+    # Удаляем только лишние пробелы, но сохраняем эмодзи и специальные символы
+    return " ".join(text.split()).lower()
+
 # Токен вашего бота
 BOT_TOKEN = '8095859951:AAFGrYc5flFZk2EU8NNnsqpVWRJTGn009D4'
 
+# Ссылка на экспорт таблицы в CSV
+HTML_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRkM4fYcOj-M5ohiK9mY2E45-lbl0ujtJ0W0bd3VpXZDoJRgai_Kl0i1Zz0lb-VpLUNQM1jzJRxWfAH/pubhtml"
+
 # ID целевой группы (если нужно пересылать сообщения)
-TARGET_GROUP_ID = -1002437528572  # Замените на правильный ID группы
+TARGET_GROUP_ID = -1002437528572
+
+# Разрешенные ID групп
+ALLOWED_CHAT_IDS = [-1002201488475, -1002437528572]  # Замените на ID ваших групп
 
 # Время в секундах (45 минут = 2700 секунд)
 PINNED_DURATION = 2700  # Изменено на 45 минут
@@ -47,6 +62,7 @@ MESSENGER_KEYWORDS = [
 SPAM_LIMIT = 4  # Максимальное количество сообщений
 SPAM_INTERVAL = 30  # Интервал в секундах
 MUTE_DURATION = 900  # Время мута в секундах (15 минут)
+
 
 # Глобальные переменные
 last_pinned_times = {}  # {chat_id: timestamp}
@@ -122,22 +138,173 @@ init_db()
 
 
 # Проверка прав администратора
-async def is_admin_or_musician(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    user = update.message.from_user
+async def is_admin_or_musician(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
+    user_id = update.message.from_user.id
+
+    # Проверяем, что сообщение пришло из разрешенной группы
+    if chat_id not in ALLOWED_CHAT_IDS and chat_id != TARGET_GROUP_ID:
+        logger.warning(f"Попытка доступа к командам из неизвестной группы {chat_id}.")
+        return False
 
     try:
-        chat_member = await context.bot.get_chat_member(chat_id, user.id)
+        chat_member = await context.bot.get_chat_member(chat_id, user_id)
         if chat_member.status in ["administrator", "creator"]:
             return True
     except Exception as e:
         logger.error(f"Ошибка при проверке прав пользователя {user.id}: {e}")
 
-    if user.username == ALLOWED_USER[1:]:
+    # Проверяем специальное разрешение через ALLOWED_USER
+    if update.message.from_user.username == ALLOWED_USER[1:]:
         return True
 
     return False
 
+# импорт с гугл
+def load_star_messages_from_html():
+    try:
+        # Получаем HTML-код таблицы
+        response = requests.get(HTML_URL)
+        response.raise_for_status()  # Проверяем успешность запроса
+
+        # Парсим HTML с помощью BeautifulSoup
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Находим все строки таблицы
+        table_rows = soup.find_all("tr")
+        if not table_rows:
+            logger.error("HTML-страница не содержит таблицы.")
+            return {}
+
+        star_messages = {}
+        for row in table_rows[1:]:  # Пропускаем заголовок
+            cols = row.find_all("td")
+            if len(cols) < 3:  # Если строка не содержит нужных данных
+                continue
+
+            # Извлекаем ключевое слово, сообщение и фото
+            keyword = clean_text(cols[0].text.strip()).lower()  # Первый столбец - ключевое слово
+            message = cols[1].text.strip()  # Второй столбец - сообщение
+            photo_url = cols[2].text.strip() if cols[2].text.strip().startswith("http") else None  # Третий столбец - фото
+
+            # Добавляем в словарь
+            if keyword and message:
+                star_messages[keyword] = {"message": message, "photo": photo_url}
+
+        logger.info(f"Загружено {len(star_messages)} сообщений из HTML.")
+        return star_messages
+
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке данных из HTML: {e}")
+        return {}
+
+# Загружаем сообщения при старте бота
+STAR_MESSAGES = load_star_messages_from_html()
+if not STAR_MESSAGES:
+    logger.warning("Не удалось загрузить сообщения из гугл-таблицы. Будут использоваться только оригинальные сообщения.")
+
+async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
+    try:
+        # Логируем оригинальный текст сообщения
+        logger.info(f"Оригинальный текст сообщения: {text}")
+
+        # Очищаем текст сообщения
+        text_cleaned = clean_text(text)
+        logger.info(f"Очищенный текст сообщения: {text_cleaned}")
+
+        # Извлекаем ключевые слова для поиска
+        search_words = text_cleaned.split()
+        logger.info(f"Ключевые слова для поиска: {search_words}")
+
+        # Проверяем, есть ли совпадение с ключевыми словами
+        target_message = None
+        for word in search_words:
+            if word in STAR_MESSAGES:
+                target_message = STAR_MESSAGES[word]
+                logger.info(f"Найдено совпадение: {word} -> {target_message['message']}")
+                break  # Прекращаем проверку после первого найденного совпадения
+
+        # Закрепляем оригинальное сообщение в исходной группе
+        await update.message.pin()
+        last_pinned_times[chat_id] = current_time
+        last_user_username[chat_id] = user.username if user.username else None
+
+        # Сохраняем информацию о закрепленном сообщении
+        try:
+            save_pinned_message(chat_id, user.id, user.username, text, current_time)
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении информации о закрепленном сообщении в чате {chat_id}: {e}")
+
+        # Автопоздравление именинников
+        await auto_birthdays(context, chat_id)
+
+        # Отправка сообщения в целевую группу
+        if chat_id != TARGET_GROUP_ID:
+            if target_message:
+                try:
+                    # Проверяем, что бот является участником целевой группы
+                    target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
+
+                    # Отправляем фото, если оно указано
+                    if target_message["photo"]:
+                        await context.bot.send_photo(
+                            chat_id=TARGET_GROUP_ID,
+                            photo=target_message["photo"]
+                        )
+
+                    # Отправляем текстовое сообщение
+                    forwarded_message = await context.bot.send_message(
+                        chat_id=TARGET_GROUP_ID,
+                        text=target_message["message"]
+                    )
+                    await forwarded_message.pin()
+
+                    logger.info(f"Отправлено сообщение из гугл-таблицы в чате {TARGET_GROUP_ID}: {target_message['message']}")
+
+                except Exception as e:
+                    logger.error(f"Ошибка при пересылке сообщения из гугл-таблицы в чате {TARGET_GROUP_ID}: {e}")
+            else:
+                # Если совпадения нет, отправляем оригинальное сообщение
+                try:
+                    new_text = text.replace("🌟 ", "").strip()
+                    forwarded_message = await context.bot.send_message(
+                        chat_id=TARGET_GROUP_ID,
+                        text=new_text
+                    )
+                    await forwarded_message.pin()
+                    logger.info(f"Отправлено оригинальное сообщение в чате {TARGET_GROUP_ID}: {new_text}")
+                except Exception as e:
+                    logger.error(f"Ошибка при пересылке оригинального сообщения в чате {TARGET_GROUP_ID}: {e}")
+
+        # Если сообщение пришло из целевой группы
+        elif chat_id == TARGET_GROUP_ID and target_message:
+            if target_message["photo"]:
+                # Отправляем только фото без текста
+                await context.bot.send_photo(
+                    chat_id=TARGET_GROUP_ID,
+                    photo=target_message["photo"]
+                )
+
+        # Отправка фото в исходную группу
+        if target_message and target_message["photo"] and chat_id != TARGET_GROUP_ID:
+            try:
+                # Отправляем фото в исходную группу без подписи
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=target_message["photo"]
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при отправке фото в исходную группу {chat_id}: {e}")
+
+        # Устанавливаем задачу на автооткрепление через 45 минут
+        try:
+            context.job_queue.run_once(unpin_all_messages, PINNED_DURATION, chat_id=chat_id)
+            logger.info(f"Установлена задача на открепление сообщений в чате {chat_id} через {PINNED_DURATION // 60} минут.")
+        except Exception as e:
+            logger.error(f"Ошибка при установке задачи на открепление сообщений в чате {chat_id}: {e}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке нового закрепленного сообщения в чате {chat_id}: {e}")
 
 # удаление сист сообщ
 async def delete_system_message(context: ContextTypes.DEFAULT_TYPE):
@@ -300,6 +467,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = message.text
     current_time = int(time.time())
 
+    # Проверяем, что сообщение пришло из разрешенной группы
+    if chat_id not in ALLOWED_CHAT_IDS and chat_id != TARGET_GROUP_ID:
+        logger.warning(f"Сообщение от пользователя {user.id} из неизвестной группы {chat_id}.")
+        return
+    
     # Проверка на бан в базе бота
     if user.id in banned_users:
         try:
@@ -424,45 +596,8 @@ async def unpin_all_messages(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при откреплении сообщений в группе {chat_id}: {e}")
 
-async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
-    try:
-        # Закрепляем новое сообщение
-        await update.message.pin()
-        last_pinned_times[chat_id] = current_time
-        last_user_username[chat_id] = user.username if user.username else None
-
-        # Сохраняем информацию о закрепленном сообщении
-        try:
-            save_pinned_message(chat_id, user.id, user.username, text, current_time)
-        except Exception as e:
-            logger.error(f"Ошибка при сохранении информации о закрепленном сообщении в чате {chat_id}: {e}")
-
-        # Автопоздравление именинников
-        try:
-            await auto_birthdays(context, chat_id)
-        except Exception as e:
-            logger.error(f"Ошибка при сохранении информации о закрепленном сообщении в чате {chat_id}: {e}")
-
-        # Пересылаем сообщение в целевую группу
-        if chat_id != TARGET_GROUP_ID:
-            try:
-                new_text = text.replace("🌟 ", "").strip()
-                forwarded_message = await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=new_text)
-                await forwarded_message.pin()
-            except Exception as e:
-                logger.error(f"Ошибка при пересылке сообщения в целевую группу из чата {chat_id}: {e}")
-
-        # Устанавливаем задачу на открепление всех сообщений через 45 минут
-        try:
-            context.job_queue.run_once(unpin_all_messages, PINNED_DURATION, chat_id=chat_id)
-        except Exception as e:
-            logger.error(f"Ошибка при установке задачи на открепление сообщений в чате {chat_id}: {e}")
-
-    except Exception as e:
-        logger.error(f"Ошибка при закреплении нового сообщения в чате {chat_id}: {e}")
 
 # обрабатывает повторные сообщения от обычных пользователей.
-# Исправленный блок process_duplicate_message
 async def process_duplicate_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
     try:
         # Удаляем повторное сообщение
@@ -540,7 +675,7 @@ def save_active_user(user_id: int, username: str, current_time: int):
 async def check_all_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db_connection()
     with conn.cursor() as cursor:
-        cursor.execute('SELECT user_id, username, birth_date FROM birthdays')
+        cursor.execute('SELECT user_id, username, first_name, birth_date FROM birthdays')
         results = cursor.fetchall()
     conn.close()
 
@@ -552,8 +687,19 @@ async def check_all_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     text = "Все дни рождения:\n"
     for row in results:
-        text += f"• @{row['username']} — {row['birth_date']}\n"
-    await update.message.reply_text(text)
+        user_id = row['user_id']
+        username = row['username']
+        first_name = row['first_name']
+
+        # Определяем, что отображать
+        display_name = first_name if first_name else (username if username else "Неизвестный пользователь")
+        text += f"• {display_name} — {row['birth_date']}\n"
+    
+    try:
+        stats_message = await update.message.reply_text(text)
+        context.job_queue.run_once(delete_system_message, 180, data=stats_message.message_id, chat_id=update.message.chat.id)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке статистического сообщения: {e}")
     await update.message.delete()
 
 async def send_correction_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
@@ -600,7 +746,11 @@ async def lider(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text += f"{i}. {user_display_name} — {row['count']} 🌟\n"
     
-    await update.message.reply_text(text)
+    try:
+        stats_message = await update.message.reply_text(text)
+        context.job_queue.run_once(delete_system_message, 180, data=stats_message.message_id, chat_id=update.message.chat.id)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке статистического сообщения: {e}")
     await update.message.delete()  # Удаляем команду
 
 
@@ -620,6 +770,7 @@ async def zh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not results:
         await update.message.reply_text("Нет закрепленных сообщений.")
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
         await update.message.delete()
         return
 
@@ -633,8 +784,12 @@ async def zh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text += f"{i}. {user_display_name}: {row['message_text']}\n"
     
-    await update.message.reply_text(text)
-    await update.message.delete()
+    try:
+        stats_message = await update.message.reply_text(text)
+        context.job_queue.run_once(delete_system_message, 180, data=stats_message.message_id, chat_id=update.message.chat.id)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке статистического сообщения: {e}")
+    await update.message.delete()  # Удаляем команду
 
 
 # Команда /activeX
@@ -669,8 +824,12 @@ async def active(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text += f"{i}. {user_display_name} — {row['total_deletes']} раз(а) написал(а)⭐\n"
     
-    await update.message.reply_text(text)
-    await update.message.delete()
+    try:
+        stats_message = await update.message.reply_text(text)
+        context.job_queue.run_once(delete_system_message, 180, data=stats_message.message_id, chat_id=update.message.chat.id)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке статистического сообщения: {e}")
+    await update.message.delete()  # Удаляем команду
 
 
 # Команда /dr
@@ -745,8 +904,12 @@ async def birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"• {user_display_name}\n"
 
     # Отправляем сообщение
-    await update.message.reply_text(text)
-    await update.message.delete()
+    try:
+        stats_message = await update.message.reply_text(text)
+        context.job_queue.run_once(delete_system_message, 180, data=stats_message.message_id, chat_id=update.message.chat.id)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке статистического сообщения: {e}")
+    await update.message.delete()  # Удаляем команду
 
 # Автопоздравление именинников
 async def auto_birthdays(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
@@ -901,7 +1064,6 @@ async def get_user_or_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Логируем действие
     logger.info(f"Пользователь {user.id} запросил ID чата {chat_id}.")
-
 
 # Команда /ban_list
 async def ban_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1084,6 +1246,39 @@ async def deban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await update.message.reply_text("Ответьте на сообщение пользователя или укажите его ID.")
         context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
         await update.message.delete()  # Удаляем команду
+
+# обновляем гугл таблицу
+async def update_google_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat.id
+    user = update.message.from_user
+
+    # Проверяем права администратора
+    if not await is_admin_or_musician(update, context):
+        response = await update.message.reply_text("У вас нет прав для выполнения этой команды.")
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
+        await update.message.delete()  # Удаляем команду
+        return
+
+    try:
+        # Загружаем обновленные данные из гугл-таблицы
+        global STAR_MESSAGES
+        STAR_MESSAGES = load_star_messages_from_html()
+
+        if not STAR_MESSAGES:
+            response = await update.message.reply_text("Не удалось обновить таблицу. Проверьте URL или содержимое таблицы.")
+            context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
+        else:
+            response = await update.message.reply_text(f"Таблица успешно обновлена. Загружено {len(STAR_MESSAGES)} записей.")
+            context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
+
+        logger.info(f"Таблица обновлена пользователем {user.username or user.first_name} в чате {chat_id}.")
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении гугл-таблицы: {e}")
+        response = await update.message.reply_text("Произошла ошибка при обновлении таблицы.")
+        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=chat_id)
+
+    await update.message.delete()  # Удаляем команду
+
 # Команда /clean
 async def clean_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
@@ -1207,7 +1402,9 @@ def main():
     application.add_handler(CommandHandler("ban_list", ban_list))
     application.add_handler(CommandHandler("ban", ban_user))
     application.add_handler(CommandHandler("deban", deban_user))
-    application.add_handler(CommandHandler("ban_history", ban_history)) 
+    application.add_handler(CommandHandler("ban_history", ban_history))
+    application.add_handler(CommandHandler("google", update_google_table))  # Новая команда /google
+ 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     try:
