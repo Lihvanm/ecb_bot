@@ -835,38 +835,66 @@ async def active(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Команда /dr
 async def dr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
+    
+    # Проверяем, существует ли уже дата рождения
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT birth_date FROM birthdays WHERE user_id = %s", (user.id,))
+        existing_birth_date = cursor.fetchone()
+    
+    if existing_birth_date:
+        # Если дата уже существует, запрещаем изменение
+        response = await update.message.reply_text(
+            "Ваша дата рождения уже зарегистрирована. "
+            "Для изменения обратитесь к администратору."
+        )
+        context.job_queue.run_once(
+            delete_system_message, 10, data=response.message_id, 
+            chat_id=update.message.chat.id
+        )
+        await update.message.delete()
+        return
+    
+    # Если даты нет, позволяем установить её
     if not context.args:
-        response = await update.message.reply_text("Напишите свою дату рождения в формате ДД.ММ.ГГГГ")
-        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
-        await update.message.delete()  # Удаляем команду
+        response = await update.message.reply_text(
+            "Напишите свою дату рождения в формате ДД.ММ.ГГГГ"
+        )
+        context.job_queue.run_once(
+            delete_system_message, 10, data=response.message_id, 
+            chat_id=update.message.chat.id
+        )
+        await update.message.delete()
         return
 
     birth_date = context.args[0]
     if not re.match(r"\d{2}\.\d{2}\.\d{4}", birth_date):
-        response = await update.message.reply_text("Неверный формат даты. Используйте ДД.ММ.ГГГГ.")
-        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
-        await update.message.delete()  # Удаляем команду
+        response = await update.message.reply_text(
+            "Неверный формат даты. Напишите одним сообщением /dr ДД.ММ.ГГГГ"
+        )
+        context.job_queue.run_once(
+            delete_system_message, 10, data=response.message_id, 
+            chat_id=update.message.chat.id
+        )
+        await update.message.delete()
         return
-
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute('''
-                INSERT INTO birthdays (user_id, username, birth_date, last_congratulated_year)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE 
-                SET birth_date = EXCLUDED.birth_date, last_congratulated_year = EXCLUDED.last_congratulated_year
-            ''', (user.id, user.username, birth_date, 0))  # 0 означает, что пользователь еще не был поздравлен
+    
+    # Сохраняем новую дату рождения
+    with conn.cursor() as cursor:
+        cursor.execute('''
+            INSERT INTO birthdays (user_id, username, birth_date, last_congratulated_year)
+            VALUES (%s, %s, %s, %s)
+        ''', (user.id, user.username, birth_date, None))
         conn.commit()
-        response = await update.message.reply_text(f"Дата рождения сохранена: {birth_date}")
-        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
-    except Exception as e:
-        logger.error(f"Ошибка при сохранении даты рождения пользователя {user.id}: {e}")
-        response = await update.message.reply_text("Произошла ошибка при сохранении даты рождения. Попробуйте снова.")
-        context.job_queue.run_once(delete_system_message, 10, data=response.message_id, chat_id=update.message.chat.id)
-    finally:
-        conn.close()
-    await update.message.delete()  # Удаляем команду
+    
+    response = await update.message.reply_text(
+        "Ваша дата рождения успешно сохранена!"
+    )
+    context.job_queue.run_once(
+        delete_system_message, 10, data=response.message_id, 
+        chat_id=update.message.chat.id
+    )
+    await update.message.delete()
 
 
 async def birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
