@@ -33,6 +33,9 @@ def clean_text(text: str) -> str:
 
 # Токен вашего бота
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+    if not BOT_TOKEN:
+        raise ValueError("Переменная BOT_TOKEN не установлена!")
+    logger.info(f"Токен бота загружен: {'*' * len(BOT_TOKEN)}")
 
 # Ссылка на экспорт таблицы в CSV
 HTML_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRkM4fYcOj-M5ohiK9mY2E45-lbl0ujtJ0W0bd3VpXZDoJRgai_Kl0i1Zz0lb-VpLUNQM1jzJRxWfAH/pubhtml"
