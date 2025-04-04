@@ -36,7 +36,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
     
 
 # Ссылка на экспорт таблицы в CSV
-HTML_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRkM4fYcOj-M5ohiK9mY2E45-lbl0ujtJ0W0bd3VpXZDoJRgai_Kl0i1Zz0lb-VpLUNQM1jzJRxWfAH/pubhtml"
+HTML_URL = os.getenv("HTML_URL")
 
 # ID целевой группы (если нужно пересылать сообщения)
 TARGET_GROUP_ID = -1002437528572
@@ -51,7 +51,7 @@ PINNED_DURATION = 2700  # Изменено на 45 минут
 ALLOWED_USER = "@Muzikant1429"
 
 # Список запрещенных слов (антимат)
-BANNED_WORDS = ["бляд", "хуй", "пизд", "наху", "гандон", "пидр", "пидорас","пидар", "шалав", "шлюх", "мразь", "мразо", "ебат"]
+BANNED_WORDS = ["бляд", "хуй", "пизд", "наху", "гандон", "пидр", "пидорас","пидар", "шалав", "шлюх", "мразь", "мразо", "ебат", "дебил", "ебал", "имебецил", "говнюк"]
 
 # Ключевые слова для мессенджеров и ссылок
 MESSENGER_KEYWORDS = [
