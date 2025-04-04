@@ -32,7 +32,7 @@ def clean_text(text: str) -> str:
     return " ".join(text.split()).lower()
 
 # Токен вашего бота
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = "BOT_TOKEN"
     if not BOT_TOKEN:
         raise ValueError("Переменная BOT_TOKEN не установлена!")
     logger.info(f"Токен бота загружен: {'*' * len(BOT_TOKEN)}")
