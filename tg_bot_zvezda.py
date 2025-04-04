@@ -32,7 +32,7 @@ def clean_text(text: str) -> str:
     return " ".join(text.split()).lower()
 
 # Токен вашего бота
-BOT_TOKEN = '8095859951:AAFGrYc5flFZk2EU8NNnsqpVWRJTGn009D4'
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # Ссылка на экспорт таблицы в CSV
 HTML_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRkM4fYcOj-M5ohiK9mY2E45-lbl0ujtJ0W0bd3VpXZDoJRgai_Kl0i1Zz0lb-VpLUNQM1jzJRxWfAH/pubhtml"
