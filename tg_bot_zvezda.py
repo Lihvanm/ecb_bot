@@ -866,7 +866,6 @@ async def active(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Команда /dr
 async def dr(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    async def dr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
     if chat_id not in ALLOWED_CHAT_IDS:
         await update.message.reply_text("иди нахуй рамзи")
