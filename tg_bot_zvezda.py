@@ -39,7 +39,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 HTML_URL = os.getenv("HTML_URL")
 
 # ID целевой группы (если нужно пересылать сообщения)
-TARGET_GROUP_ID = -1002437528572
+TARGET_GROUP_ID = -1002385047417
 
 # Разрешенные ID групп
 ALLOWED_CHAT_IDS = [-1002201488475, -1002437528572, -1002385047417, -1002382138419]  # Замените на ID ваших групп
@@ -460,23 +460,65 @@ async def delete_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.delete()  # Удаляем команду
 
-# Обработчик новых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Добавленное логирование в самом начале функции
-    logger.info(f"Получен апдейт: {update.to_dict()}")  # Логируем весь апдейт
-    
-    message = update.message
+    # Обрабатываем как новые сообщения, так и отредактированные
+    message = update.message or update.edited_message
     if message is None:
         logger.warning("Получен апдейт без сообщения")
-        return  # Игнорируем апдейты без сообщения
-    
-    # Логируем текст сообщения (если есть)
-    logger.info(f"Текст сообщения: {message.text if message.text else 'Нет текста'}")
-    
+        return
+
+    # Форматируем тип апдейта для логов
+    update_type = "ОТРЕДАКТИРОВАННОЕ" if update.edited_message else "НОВОЕ"
+    logger.info(f"{update_type} сообщение от @{message.from_user.username}: {message.text}")
+
     user = message.from_user
     chat_id = message.chat.id
     text = message.text
     current_time = int(time.time())
+
+    # --- Полная перепроверка ВСЕХ правил ---
+    # 1. Проверка на мат (даже если это правка)
+    if text and any(word in text.lower() for word in BANNED_WORDS):
+        await message.delete()
+        logger.info(f"Удален мат в {update_type.lower()} сообщении")
+        return
+
+    # 2. Проверка на рекламу
+    if text and any(keyword in text.lower() for keyword in MESSENGER_KEYWORDS):
+        await message.delete()
+        logger.info(f"Удалена реклама в {update_type.lower()} сообщении")
+        return
+
+    # 3. Проверка на триггеры (зч/звезда) 
+    if text and text.startswith(("звезда", "зч")):
+        # Проверяем, не пришло ли сообщение из таргет-группы
+        if chat_id == TARGET_GROUP_ID:
+            logger.info("Сообщение пришло из таргет-группы - пропускаем обработку")
+            return
+            
+        # Проверяем наличие активного закрепленного сообщения в таргет-группе
+        try:
+            target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
+            target_pinned = target_chat.pinned_message
+            
+            # Если в таргет-группе есть закреп и время не истекло
+            if target_pinned and (current_time - target_pinned.date.timestamp()) < PINNED_DURATION:
+                logger.info(f"В таргет-группе активен закреп (осталось {PINNED_DURATION - (current_time - target_pinned.date.timestamp())} сек) - пропускаем")
+                return
+                
+        except Exception as e:
+            logger.error(f"Ошибка при проверке таргет-группы: {e}")
+
+        # Удаляем старую закрепку (если была)
+        try:
+            await context.bot.unpin_all_chat_messages(chat_id=chat_id)
+            logger.info(f"Удалены старые закрепки в чате {chat_id}")
+        except Exception as e:
+            logger.error(f"Ошибка при откреплении: {e}")
+
+        # Обрабатываем как новое (даже если это правка)
+        await process_new_pinned_message(update, context, chat_id, user, text, current_time)
+        return
 
     # Проверяем, что сообщение пришло из разрешенной группы
     if chat_id not in ALLOWED_CHAT_IDS and chat_id != TARGET_GROUP_ID:
