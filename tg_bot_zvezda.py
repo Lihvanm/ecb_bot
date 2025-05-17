@@ -462,9 +462,17 @@ async def delete_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Обработчик новых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Добавленное логирование в самом начале функции
+    logger.info(f"Получен апдейт: {update.to_dict()}")  # Логируем весь апдейт
+    
     message = update.message
     if message is None:
+        logger.warning("Получен апдейт без сообщения")
         return  # Игнорируем апдейты без сообщения
+    
+    # Логируем текст сообщения (если есть)
+    logger.info(f"Текст сообщения: {message.text if message.text else 'Нет текста'}")
+    
     user = message.from_user
     chat_id = message.chat.id
     text = message.text
