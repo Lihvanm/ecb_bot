@@ -463,6 +463,8 @@ async def delete_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Обработчик новых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
+    if message is None:
+        return  # Игнорируем апдейты без сообщения
     user = message.from_user
     chat_id = message.chat.id
     text = message.text
