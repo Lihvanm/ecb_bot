@@ -140,8 +140,13 @@ init_db()
 
 # Проверка прав администратора
 async def is_admin_or_musician(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat.id
-    user_id = update.message.from_user.id
+    # Получаем сообщение или edited_message
+    message = update.message or update.edited_message
+    if not message:
+        return False
+
+    chat_id = message.chat.id
+    user_id = message.from_user.id
 
     # Проверяем, что сообщение пришло из разрешенной группы
     if chat_id not in ALLOWED_CHAT_IDS and chat_id != TARGET_GROUP_ID:
@@ -156,7 +161,7 @@ async def is_admin_or_musician(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Ошибка при проверке прав пользователя {user_id}: {e}")
 
     # Проверяем специальное разрешение через ALLOWED_USER
-    if update.message.from_user.username == ALLOWED_USER[1:]:
+    if message.from_user.username == ALLOWED_USER[1:]:
         return True
 
     return False
@@ -1499,9 +1504,14 @@ def load_banned_users():
 
 # Основная функция
 def main():
+     # Добавляем обработчик ошибок
+    async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logger.error(f"Ошибка: {context.error}", exc_info=True)
+        
     load_banned_users()
     application = Application.builder().token(BOT_TOKEN).build()
     job_queue = application.job_queue  # Инициализация JobQueue
+    application.add_error_handler(error_handler)
 
      # Добавляем новые команды
     application.add_handler(CommandHandler("clean", clean_database))
