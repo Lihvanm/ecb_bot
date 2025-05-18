@@ -351,6 +351,10 @@ async def reset_pin_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.delete()  # Удаляем команду
         return
 
+    # Очищаем сохраненные данные вручную
+    context.chat_data.pop('source_last_photo_id', None)
+    context.chat_data.pop('target_last_photo_id', None)
+
     last_pinned_times[chat_id] = 0
 
     try:
@@ -683,10 +687,16 @@ def save_pinned_message(chat_id: int, user_id: int, username: str, message_text:
 async def unpin_all_messages(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     try:
+        # Очищаем сохраненные данные
+        if 'source_last_photo_id' in context.chat_data:
+            del context.chat_data['source_last_photo_id']
+        if 'target_last_photo_id' in context.chat_data:
+            del context.chat_data['target_last_photo_id']
+        
         await context.bot.unpin_all_chat_messages(chat_id=chat_id)
-        logger.info(f"Все сообщения успешно откреплены в группе {chat_id}.")
+        logger.info(f"Таймер сброшен, данные очищены в чате {chat_id}")
     except Exception as e:
-        logger.error(f"Ошибка при откреплении сообщений в группе {chat_id}: {e}")
+        logger.error(f"Ошибка при сбросе таймера: {e}")
 
 
 # обрабатывает повторные сообщения от обычных пользователей.
