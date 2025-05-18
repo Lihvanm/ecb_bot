@@ -238,7 +238,7 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
                 except Exception as e:
                     logger.error(f"Ошибка удаления фото в исходной группе: {e}")
 
-            # Отправляем новое фото
+            # Отправляем новое фото (только в исходной группе)
             if target_message and target_message.get("photo"):
                 photo_msg = await context.bot.send_photo(
                     chat_id=chat_id,
@@ -258,7 +258,7 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
         except Exception as e:
             logger.error(f"Ошибка в исходной группе: {e}")
 
-        # 3. Обработка целевой группы
+        # 3. Обработка целевой группы (без отправки фото)
         try:
             # Удаляем предыдущие материалы ТОЛЬКО при корректировке
             if is_correction:
@@ -276,22 +276,14 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
                     except Exception as e:
                         logger.error(f"Ошибка удаления фото в целевой группе: {e}")
 
-            # Отправляем новое фото (если есть)
-            if target_message and target_message.get("photo"):
-                photo_msg = await context.bot.send_photo(
-                    chat_id=TARGET_GROUP_ID,
-                    photo=target_message["photo"]
-                )
-                context.chat_data['target_last_photo_id'] = photo_msg.message_id
-            
-            # Отправляем и закрепляем текст
+            # Отправляем только текст (без фото)
             msg_text = target_message["message"] if target_message else text.replace("🌟 ", "").strip()
             msg = await context.bot.send_message(
                 chat_id=TARGET_GROUP_ID,
                 text=msg_text
             )
             await msg.pin()
-            logger.info("Целевая группа обновлена")
+            logger.info("Целевая группа обновлена (без фото)")
             
         except Exception as e:
             logger.error(f"Ошибка в целевой группе: {e}")
