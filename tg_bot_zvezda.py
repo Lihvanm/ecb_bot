@@ -229,20 +229,28 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # 2. Обработка в исходной группе
         try:
-            # Отправляем фото из 3 столбца таблицы (если есть)
+            # Удаляем предыдущее фото бота в этой группе (если было)
+            if 'last_photo_msg_id' in context.chat_data:
+                try:
+                    await context.bot.delete_message(chat_id, context.chat_data['last_photo_msg_id'])
+                except Exception as e:
+                    logger.error(f"Error deleting old photo: {e}")
+
+            # Отправляем новое фото из 3 столбца таблицы (если есть)
             if target_message and target_message.get("photo"):
-                await context.bot.send_photo(
+                photo_msg = await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=target_message["photo"]
                 )
+                context.chat_data['last_photo_msg_id'] = photo_msg.message_id
             
             # Проверяем и открепляем старое сообщение того же автора
             chat = await context.bot.get_chat(chat_id)
             if chat.pinned_message and chat.pinned_message.from_user.id == user.id:
                 await context.bot.unpin_chat_message(chat_id, chat.pinned_message.message_id)
             
-            # Закрепляем новое сообщение
-            await message.pin()
+            # Закрепляем новое сообщение без уведомления
+            await message.pin(disable_notification=True)
             logger.info(f"Pinned in source chat {chat_id}")
             
             # Сохраняем информацию о закреплении
@@ -258,20 +266,19 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
             
             # Удаляем ВСЕ сообщения от бота в таргет-группе
             try:
-                # Сначала открепляем все сообщения
+                # 1. Открепляем все сообщения
                 await context.bot.unpin_all_chat_messages(TARGET_GROUP_ID)
                 
-                # Затем удаляем последние сообщения от бота (до 5)
-                deleted_count = 0
-                async for msg in context.bot.get_chat_history(TARGET_GROUP_ID, limit=10):
-                    if msg.from_user and msg.from_user.id == context.bot.id:
+                # 2. Удаляем последние 5 сообщений от бота (используем get_updates)
+                updates = await context.bot.get_updates(offset=-5, timeout=5)
+                for update_msg in updates:
+                    if (update_msg.message and 
+                        update_msg.message.chat.id == TARGET_GROUP_ID and 
+                        update_msg.message.from_user.id == context.bot.id):
                         try:
-                            await msg.delete()
-                            deleted_count += 1
-                            if deleted_count >= 5:  # Максимум 5 сообщений
-                                break
+                            await update_msg.message.delete()
                         except Exception as e:
-                            logger.error(f"Error deleting message {msg.message_id}: {e}")
+                            logger.error(f"Error deleting message: {e}")
             except Exception as e:
                 logger.error(f"Error cleaning target group: {e}")
 
@@ -282,13 +289,13 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
                     photo=target_message["photo"]
                 )
             
-            # Отправляем и закрепляем текст
+            # Отправляем и закрепляем текст (без уведомления)
             msg_text = target_message["message"] if target_message else text.replace("🌟 ", "").strip()
             msg = await context.bot.send_message(
                 chat_id=TARGET_GROUP_ID,
                 text=msg_text
             )
-            await msg.pin(disable_notification=True)  # Закрепляем без уведомления
+            await msg.pin(disable_notification=True)
             logger.info("Target group updated")
             
         except Exception as e:
