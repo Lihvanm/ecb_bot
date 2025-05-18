@@ -493,10 +493,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning("Получен апдейт без сообщения")
         return
 
-    # Форматируем тип апдейта для логов
-    update_type = "ОТРЕДАКТИРОВАННОЕ" if update.edited_message else "НОВОЕ"
-    logger.info(f"{update_type} сообщение от @{message.from_user.username}: {message.text}")
-
+    # Проверяем, является ли это редактированием
+    is_edit = update.edited_message is not None
+    
+    # Если это редактирование и сообщение начинается с триггеров зч
+    if is_edit and message.text and message.text.lower().startswith(("звезда", "зч", "🌟")):
+        # Удаляем старое сообщение бота в этой группе (если есть)
+        try:
+            chat = await context.bot.get_chat(message.chat.id)
+            if chat.pinned_message and chat.pinned_message.from_user.id == context.bot.id:
+                await context.bot.delete_message(message.chat.id, chat.pinned_message.message_id)
+        except Exception as e:
+            logger.error(f"Error deleting old bot message: {e}")
+        
+        # Обрабатываем как новое сообщение
+        await process_new_pinned_message(update, context, message.chat.id, message.from_user, message.text, int(time.time()))
+        return
+    
+    # Остальная логика обработки сообщений...
     user = message.from_user
     chat_id = message.chat.id
     text = message.text
