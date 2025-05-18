@@ -229,12 +229,24 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # 2. Обработка в исходной группе
         try:
-            # Удаляем предыдущее фото бота в этой группе (если было)
+            # Удаляем предыдущее фото и уведомление о закрепе в этой группе
+            chat = await context.bot.get_chat(chat_id)
+            
+            # Удаляем старое фото (если было сохранено)
             if 'last_photo_msg_id' in context.chat_data:
                 try:
                     await context.bot.delete_message(chat_id, context.chat_data['last_photo_msg_id'])
                 except Exception as e:
                     logger.error(f"Error deleting old photo: {e}")
+
+            # Удаляем уведомление о закрепе (последнее сообщение от бота)
+            try:
+                async for msg in context.bot.get_chat_history(chat_id, limit=5):
+                    if msg.from_user and msg.from_user.id == context.bot.id and msg.message_id != message.message_id:
+                        await msg.delete()
+                        break
+            except Exception as e:
+                logger.error(f"Error deleting pin notification: {e}")
 
             # Отправляем новое фото из 3 столбца таблицы (если есть)
             if target_message and target_message.get("photo"):
@@ -244,8 +256,7 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
                 )
                 context.chat_data['last_photo_msg_id'] = photo_msg.message_id
             
-            # Проверяем и открепляем старое сообщение того же автора
-            chat = await context.bot.get_chat(chat_id)
+            # Открепляем старое сообщение того же автора
             if chat.pinned_message and chat.pinned_message.from_user.id == user.id:
                 await context.bot.unpin_chat_message(chat_id, chat.pinned_message.message_id)
             
@@ -269,14 +280,11 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
                 # 1. Открепляем все сообщения
                 await context.bot.unpin_all_chat_messages(TARGET_GROUP_ID)
                 
-                # 2. Удаляем последние 5 сообщений от бота (используем get_updates)
-                updates = await context.bot.get_updates(offset=-5, timeout=5)
-                for update_msg in updates:
-                    if (update_msg.message and 
-                        update_msg.message.chat.id == TARGET_GROUP_ID and 
-                        update_msg.message.from_user.id == context.bot.id):
+                # 2. Удаляем последние 5 сообщений от бота
+                async for msg in context.bot.get_chat_history(TARGET_GROUP_ID, limit=5):
+                    if msg.from_user and msg.from_user.id == context.bot.id:
                         try:
-                            await update_msg.message.delete()
+                            await msg.delete()
                         except Exception as e:
                             logger.error(f"Error deleting message: {e}")
             except Exception as e:
