@@ -216,8 +216,8 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
             logger.error("Сообщение не найдено")
             return
 
-        # Проверяем, пришло ли сообщение из таргет-группы
-        is_target_group = (chat_id == TARGET_GROUP_ID)
+        # Проверяем, является ли это корректировкой (редактированием)
+        is_correction = bool(update.edited_message)
 
         # 1. Поиск в Google Sheets
         text_cleaned = clean_text(text)
@@ -229,55 +229,55 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
                 target_message = STAR_MESSAGES[word]
                 logger.info(f"Найдено совпадение: {word} -> {target_message['message']}")
 
-        # 2. Обработка в исходной группе (если сообщение не из таргет-группы)
-        if not is_target_group:
-            try:
-                # Удаляем предыдущее фото бота
-                if 'source_last_photo_id' in context.chat_data:
-                    try:
-                        await context.bot.delete_message(chat_id, context.chat_data['source_last_photo_id'])
-                    except Exception as e:
-                        logger.error(f"Ошибка удаления фото в исходной группе: {e}")
+        # 2. Обработка в исходной группе
+        try:
+            # Удаляем предыдущее фото бота ТОЛЬКО при корректировке
+            if is_correction and 'source_last_photo_id' in context.chat_data:
+                try:
+                    await context.bot.delete_message(chat_id, context.chat_data['source_last_photo_id'])
+                except Exception as e:
+                    logger.error(f"Ошибка удаления фото в исходной группе: {e}")
 
-                # Отправляем новое фото
-                if target_message and target_message.get("photo"):
-                    photo_msg = await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=target_message["photo"]
-                    )
-                    context.chat_data['source_last_photo_id'] = photo_msg.message_id
-                
-                # Открепляем старое сообщение автора
-                chat = await context.bot.get_chat(chat_id)
-                if chat.pinned_message and chat.pinned_message.from_user.id == user.id:
-                    await context.bot.unpin_chat_message(chat_id, chat.pinned_message.message_id)
-                
-                # Закрепляем с уведомлением
-                await message.pin()
-                logger.info(f"Закреплено в исходной группе {chat_id}")
-                
-            except Exception as e:
-                logger.error(f"Ошибка в исходной группе: {e}")
+            # Отправляем новое фото
+            if target_message and target_message.get("photo"):
+                photo_msg = await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=target_message["photo"]
+                )
+                context.chat_data['source_last_photo_id'] = photo_msg.message_id
+            
+            # Открепляем старое сообщение автора ТОЛЬКО при корректировке
+            chat = await context.bot.get_chat(chat_id)
+            if is_correction and chat.pinned_message and chat.pinned_message.from_user.id == user.id:
+                await context.bot.unpin_chat_message(chat_id, chat.pinned_message.message_id)
+            
+            # Закрепляем с уведомлением
+            await message.pin()
+            logger.info(f"Закреплено в исходной группе {chat_id}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка в исходной группе: {e}")
 
         # 3. Обработка целевой группы
         try:
-            # Удаляем предыдущие материалы
-            target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
-            
-            if target_chat.pinned_message:
-                try:
-                    await context.bot.delete_message(TARGET_GROUP_ID, target_chat.pinned_message.message_id)
-                except Exception as e:
-                    logger.error(f"Ошибка удаления закрепленного сообщения: {e}")
-            
-            if 'target_last_photo_id' in context.chat_data:
-                try:
-                    await context.bot.delete_message(TARGET_GROUP_ID, context.chat_data['target_last_photo_id'])
-                except Exception as e:
-                    logger.error(f"Ошибка удаления фото в целевой группе: {e}")
+            # Удаляем предыдущие материалы ТОЛЬКО при корректировке
+            if is_correction:
+                target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
+                
+                if target_chat.pinned_message:
+                    try:
+                        await context.bot.delete_message(TARGET_GROUP_ID, target_chat.pinned_message.message_id)
+                    except Exception as e:
+                        logger.error(f"Ошибка удаления закрепленного сообщения: {e}")
+                
+                if 'target_last_photo_id' in context.chat_data:
+                    try:
+                        await context.bot.delete_message(TARGET_GROUP_ID, context.chat_data['target_last_photo_id'])
+                    except Exception as e:
+                        logger.error(f"Ошибка удаления фото в целевой группе: {e}")
 
-            # Отправляем фото ТОЛЬКО если сообщение пришло не из таргет-группы
-            if target_message and target_message.get("photo") and not is_target_group:
+            # Отправляем новое фото (если есть)
+            if target_message and target_message.get("photo"):
                 photo_msg = await context.bot.send_photo(
                     chat_id=TARGET_GROUP_ID,
                     photo=target_message["photo"]
