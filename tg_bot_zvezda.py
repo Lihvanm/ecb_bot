@@ -213,7 +213,7 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
     try:
         message = update.message or update.edited_message
         if not message:
-            logger.error("Message object not found")
+            logger.error("Сообщение не найдено")
             return
 
         # 1. Поиск в Google Sheets
@@ -228,20 +228,20 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # 2. Обработка в исходной группе
         try:
-            # Удаляем предыдущее фото бота
-            if 'last_photo_msg_id' in context.chat_data:
+            # Удаляем предыдущее фото бота в ИСХОДНОЙ группе
+            if 'source_last_photo_id' in context.chat_data:
                 try:
-                    await context.bot.delete_message(chat_id, context.chat_data['last_photo_msg_id'])
+                    await context.bot.delete_message(chat_id, context.chat_data['source_last_photo_id'])
                 except Exception as e:
-                    logger.error(f"Ошибка удаления фото: {e}")
+                    logger.error(f"Ошибка удаления фото в исходной группе: {e}")
 
-            # Отправляем новое фото из таблицы
+            # Отправляем новое фото
             if target_message and target_message.get("photo"):
                 photo_msg = await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=target_message["photo"]
                 )
-                context.chat_data['last_photo_msg_id'] = photo_msg.message_id
+                context.chat_data['source_last_photo_id'] = photo_msg.message_id  # Сохраняем ID нового фото
             
             # Открепляем старое сообщение автора
             chat = await context.bot.get_chat(chat_id)
@@ -257,28 +257,38 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # 3. Обработка целевой группы
         try:
-            # Удаляем предыдущее закрепленное сообщение
+            # Удаляем предыдущие материалы в ЦЕЛЕВОЙ группе:
             target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
+            
+            # 1. Удаляем закрепленное сообщение
             if target_chat.pinned_message:
                 try:
                     await context.bot.delete_message(TARGET_GROUP_ID, target_chat.pinned_message.message_id)
                 except Exception as e:
                     logger.error(f"Ошибка удаления закрепленного сообщения: {e}")
+            
+            # 2. Удаляем предыдущее фото (если было сохранено)
+            if 'target_last_photo_id' in context.chat_data:
+                try:
+                    await context.bot.delete_message(TARGET_GROUP_ID, context.chat_data['target_last_photo_id'])
+                except Exception as e:
+                    logger.error(f"Ошибка удаления фото в целевой группе: {e}")
 
             # Отправляем новое фото
             if target_message and target_message.get("photo"):
-                await context.bot.send_photo(
+                photo_msg = await context.bot.send_photo(
                     chat_id=TARGET_GROUP_ID,
                     photo=target_message["photo"]
                 )
+                context.chat_data['target_last_photo_id'] = photo_msg.message_id  # Сохраняем ID нового фото
             
-            # Отправляем и закрепляем текст с уведомлением
+            # Отправляем и закрепляем текст
             msg_text = target_message["message"] if target_message else text.replace("🌟 ", "").strip()
             msg = await context.bot.send_message(
                 chat_id=TARGET_GROUP_ID,
                 text=msg_text
             )
-            await msg.pin()  # Закрепляем с уведомлением
+            await msg.pin()
             logger.info("Целевая группа обновлена")
             
         except Exception as e:
