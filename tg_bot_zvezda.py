@@ -216,7 +216,7 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
             logger.error("Message object not found")
             return
 
-        # 1. Поиск в Google Sheets
+        # 1. Поиск данных в Google Sheets
         text_cleaned = clean_text(text)
         search_words = text_cleaned.split()
         target_message = None
@@ -229,74 +229,62 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # 2. Обработка в исходной группе
         try:
+            # Проверяем и открепляем старое сообщение того же автора
+            chat = await context.bot.get_chat(chat_id)
+            if chat.pinned_message and chat.pinned_message.from_user.id == user.id:
+                await context.bot.unpin_chat_message(chat_id, chat.pinned_message.message_id)
+                # Удаляем старое сообщение автора
+                try:
+                    await chat.pinned_message.delete()
+                except Exception as e:
+                    logger.error(f"Error deleting old pinned message: {e}")
+            
             # Закрепляем новое сообщение
-            await message.pin(disable_notification=True)
+            await message.pin()
             logger.info(f"Pinned in source chat {chat_id}")
             
-            # Удаляем старые сообщения бота (текст и фото)
-            async with context.bot:
-                async for old_msg in context.bot.get_updates(limit=5):
-                    if old_msg.message and old_msg.message.chat.id == chat_id and old_msg.message.from_user.id == context.bot.id:
-                        await context.bot.delete_message(chat_id, old_msg.message.message_id)
-
-            # Отправляем новое фото если есть
-            if target_message and target_message.get("photo"):
-                try:
-                    await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=target_message["photo"],
-                        disable_notification=True
-                    )
-                    logger.info("Sent photo to source chat")
-                except Exception as e:
-                    logger.error(f"Photo send error: {e}")
-
+            # Сохраняем информацию о закреплении
             save_pinned_message(chat_id, user.id, user.username, text, current_time)
-            
         except Exception as e:
             logger.error(f"Source chat error: {e}")
             return
 
         # 3. Обработка таргет-группы
-        if chat_id != TARGET_GROUP_ID:
-            try:
-                # Удаляем старые сообщения бота
-                async with context.bot:
-                    async for old_msg in context.bot.get_updates(limit=5):
-                        if old_msg.message and old_msg.message.chat.id == TARGET_GROUP_ID and old_msg.message.from_user.id == context.bot.id:
-                            await context.bot.delete_message(TARGET_GROUP_ID, old_msg.message.message_id)
-
-                # Отправляем новое сообщение
-                msg_text = target_message["message"] if target_message else text.replace("🌟 ", "").strip()
-                msg = await context.bot.send_message(
+        try:
+            target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
+            
+            # Удаляем ВСЕ предыдущие сообщения бота в таргет-группе
+            async for old_message in context.bot.get_chat_history(TARGET_GROUP_ID, limit=2):
+                if old_message.from_user and old_message.from_user.id == context.bot.id:
+                    try:
+                        await old_message.delete()
+                    except Exception as e:
+                        logger.error(f"Error deleting old bot message in target group: {e}")
+            
+            # Отправляем новое фото если есть
+            if target_message and target_message.get("photo"):
+                await context.bot.send_photo(
                     chat_id=TARGET_GROUP_ID,
-                    text=msg_text,
-                    disable_notification=True
+                    photo=target_message["photo"]
                 )
-                
-                # Отправляем фото если есть
-                if target_message and target_message.get("photo"):
-                    await context.bot.send_photo(
-                        chat_id=TARGET_GROUP_ID,
-                        photo=target_message["photo"],
-                        disable_notification=True
-                    )
-                
-                await msg.pin(disable_notification=True)
-                logger.info("Target group updated")
-                
-            except Exception as e:
-                logger.error(f"Target group error: {e}")
+            
+            # Отправляем и закрепляем текст
+            msg_text = target_message["message"] if target_message else text.replace("🌟 ", "").strip()
+            msg = await context.bot.send_message(
+                chat_id=TARGET_GROUP_ID,
+                text=msg_text
+            )
+            await msg.pin()
+            logger.info("Target group updated")
+            
+        except Exception as e:
+            logger.error(f"Target group processing error: {e}")
 
         # 4. Установка таймера
-        context.job_queue.run_once(
-            lambda ctx: unpin_all_messages(ctx, chat_id=chat_id),
-            PINNED_DURATION,
-            name=f"unpin_{chat_id}_{current_time}"
-        )
+        context.job_queue.run_once(unpin_all_messages, PINNED_DURATION, chat_id=chat_id)
 
     except Exception as e:
-        logger.error(f"Critical error: {e}")
+        logger.error(f"Critical error in process_new_pinned_message: {e}")
 
 async def process_target_group(context, chat_id, user, target_message, text):
     """Отдельная обработка для таргет-группы"""
