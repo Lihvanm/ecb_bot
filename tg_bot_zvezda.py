@@ -213,10 +213,10 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
     try:
         message = update.message or update.edited_message
         if not message:
-            logger.error("Message object not found")
+            logger.error("Не удалось получить объект сообщения")
             return
 
-        # 1. Поиск данных в Google Sheets
+        # 1. Получаем данные из Google Sheets
         text_cleaned = clean_text(text)
         search_words = text_cleaned.split()
         target_message = None
@@ -224,75 +224,96 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
         for word in search_words:
             if word in STAR_MESSAGES:
                 target_message = STAR_MESSAGES[word]
-                logger.info(f"Match found: {word} -> {target_message['message']}")
+                logger.info(f"Найдено совпадение: {word} -> {target_message['message']}")
                 break
 
         # 2. Обработка в исходной группе
         try:
-            # Удаляем ВСЕ предыдущие сообщения бота в этой группе
-            async for old_msg in context.bot.get_chat_history(chat_id, limit=10):
-                if old_msg.from_user.id == context.bot.id:
-                    await old_msg.delete()
-                    logger.info(f"Deleted old bot message in source chat: {old_msg.message_id}")
-
-            # Закрепляем новое сообщение пользователя
-            await message.pin()
-            logger.info(f"Pinned in source chat {chat_id}")
+            # Сначала закрепляем новое сообщение
+            await message.pin(disable_notification=True)
+            logger.info(f"Сообщение закреплено в чате {chat_id}")
             
+            # Затем открепляем старое (если есть)
+            try:
+                chat = await context.bot.get_chat(chat_id)
+                if chat.pinned_message and chat.pinned_message.message_id != message.message_id:
+                    await context.bot.unpin_chat_message(chat_id, chat.pinned_message.message_id)
+            except Exception as e:
+                logger.error(f"Ошибка при откреплении: {e}")
+
             # Отправляем фото если есть
             if target_message and target_message.get("photo"):
-                await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=target_message["photo"]
-                )
-                logger.info("Sent new photo to source chat")
-            
+                try:
+                    # Удаляем старое фото бота
+                    async for old_msg in context.bot.get_chat_history(chat_id, limit=5):
+                        if old_msg.from_user.id == context.bot.id and old_msg.photo:
+                            await old_msg.delete()
+                            break
+                    
+                    # Отправляем новое фото
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=target_message["photo"],
+                        disable_notification=True
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка обработки фото: {e}")
+
             # Сохраняем информацию о закреплении
             save_pinned_message(chat_id, user.id, user.username, text, current_time)
+            
         except Exception as e:
-            logger.error(f"Source chat error: {e}")
+            logger.error(f"Ошибка в исходной группе: {e}")
             return
 
         # 3. Обработка таргет-группы
         if chat_id != TARGET_GROUP_ID:
             try:
-                # Удаляем ВСЕ предыдущие сообщения бота в таргет-группе
-                async for old_msg in context.bot.get_chat_history(TARGET_GROUP_ID, limit=10):
+                # Удаляем старые сообщения бота
+                async for old_msg in context.bot.get_chat_history(TARGET_GROUP_ID, limit=5):
                     if old_msg.from_user.id == context.bot.id:
                         await old_msg.delete()
-                        logger.info(f"Deleted old bot message in target chat: {old_msg.message_id}")
-
+                
                 # Отправляем новое сообщение
                 if target_message:
                     # Отправляем фото если есть
                     if target_message.get("photo"):
                         await context.bot.send_photo(
                             chat_id=TARGET_GROUP_ID,
-                            photo=target_message["photo"]
+                            photo=target_message["photo"],
+                            disable_notification=True
                         )
                     
-                    # Отправляем и закрепляем текст
+                    # Отправляем текст
                     msg = await context.bot.send_message(
                         chat_id=TARGET_GROUP_ID,
-                        text=target_message["message"]
+                        text=target_message["message"],
+                        disable_notification=True
                     )
                 else:
                     msg = await context.bot.send_message(
                         chat_id=TARGET_GROUP_ID,
-                        text=text.replace("🌟 ", "").strip()
+                        text=text.replace("🌟 ", "").strip(),
+                        disable_notification=True
                     )
                 
-                await msg.pin()
-                logger.info("Target group updated with new content")
+                # Закрепляем новое сообщение
+                await msg.pin(disable_notification=True)
+                logger.info("Обновлено сообщение в таргет-группе")
                 
             except Exception as e:
-                logger.error(f"Target group error: {e}")
+                logger.error(f"Ошибка таргет-группы: {e}")
 
-        # 4. Установка таймера открепления
-        context.job_queue.run_once(unpin_all_messages, PINNED_DURATION, chat_id=chat_id)
+        # 4. Устанавливаем таймер открепления
+        context.job_queue.run_once(
+            callback=unpin_all_messages,
+            when=PINNED_DURATION,
+            chat_id=chat_id,
+            name=f"unpin_{chat_id}_{message.message_id}"
+        )
 
     except Exception as e:
-        logger.error(f"Critical error: {e}")
+        logger.error(f"Критическая ошибка: {e}")
 
 async def process_target_group(context, chat_id, user, target_message, text):
     """Отдельная обработка для таргет-группы"""
