@@ -229,14 +229,23 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # 2. Обработка в исходной группе
         try:
-            # Проверяем и открепляем старое сообщение того же автора
-            chat = await context.bot.get_chat(chat_id)
-            if chat.pinned_message and chat.pinned_message.from_user.id == user.id:
-                await context.bot.unpin_chat_message(chat_id, chat.pinned_message.message_id)
-            
-            # Закрепляем новое сообщение
+            # Удаляем ВСЕ предыдущие сообщения бота в этой группе
+            async for old_msg in context.bot.get_chat_history(chat_id, limit=10):
+                if old_msg.from_user.id == context.bot.id:
+                    await old_msg.delete()
+                    logger.info(f"Deleted old bot message in source chat: {old_msg.message_id}")
+
+            # Закрепляем новое сообщение пользователя
             await message.pin()
             logger.info(f"Pinned in source chat {chat_id}")
+            
+            # Отправляем фото если есть
+            if target_message and target_message.get("photo"):
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=target_message["photo"]
+                )
+                logger.info("Sent new photo to source chat")
             
             # Сохраняем информацию о закреплении
             save_pinned_message(chat_id, user.id, user.username, text, current_time)
@@ -244,25 +253,42 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
             logger.error(f"Source chat error: {e}")
             return
 
-        # 3. Обработка фото (если есть ссылка из Google Sheets)
-        if target_message and target_message.get("photo"):
-            photo_url = target_message["photo"]
+        # 3. Обработка таргет-группы
+        if chat_id != TARGET_GROUP_ID:
             try:
-                # Для исходной группы
-                if chat_id != TARGET_GROUP_ID:
-                    await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=photo_url
+                # Удаляем ВСЕ предыдущие сообщения бота в таргет-группе
+                async for old_msg in context.bot.get_chat_history(TARGET_GROUP_ID, limit=10):
+                    if old_msg.from_user.id == context.bot.id:
+                        await old_msg.delete()
+                        logger.info(f"Deleted old bot message in target chat: {old_msg.message_id}")
+
+                # Отправляем новое сообщение
+                if target_message:
+                    # Отправляем фото если есть
+                    if target_message.get("photo"):
+                        await context.bot.send_photo(
+                            chat_id=TARGET_GROUP_ID,
+                            photo=target_message["photo"]
+                        )
+                    
+                    # Отправляем и закрепляем текст
+                    msg = await context.bot.send_message(
+                        chat_id=TARGET_GROUP_ID,
+                        text=target_message["message"]
                     )
-                    logger.info("Sent photo to source chat")
+                else:
+                    msg = await context.bot.send_message(
+                        chat_id=TARGET_GROUP_ID,
+                        text=text.replace("🌟 ", "").strip()
+                    )
                 
-                # Для таргет-группы
-                await process_target_group(context, chat_id, user, target_message, text)
+                await msg.pin()
+                logger.info("Target group updated with new content")
                 
             except Exception as e:
-                logger.error(f"Photo processing error: {e}")
+                logger.error(f"Target group error: {e}")
 
-        # 4. Установка таймера
+        # 4. Установка таймера открепления
         context.job_queue.run_once(unpin_all_messages, PINNED_DURATION, chat_id=chat_id)
 
     except Exception as e:
