@@ -211,107 +211,107 @@ if not STAR_MESSAGES:
 
 async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user, text: str, current_time: int):
     try:
-        # Логируем оригинальный текст сообщения
+        # Получаем сообщение (новое или отредактированное)
+        message = update.message or update.edited_message
+        if not message:
+            logger.error("Не удалось получить объект сообщения")
+            return
+
+        # Логируем оригинальный текст
         logger.info(f"Оригинальный текст сообщения: {text}")
 
-        # Очищаем текст сообщения
+        # Очищаем текст и находим ключевые слова
         text_cleaned = clean_text(text)
         logger.info(f"Очищенный текст сообщения: {text_cleaned}")
-
-        # Извлекаем ключевые слова для поиска
         search_words = text_cleaned.split()
         logger.info(f"Ключевые слова для поиска: {search_words}")
 
-        # Проверяем, есть ли совпадение с ключевыми словами
+        # Поиск совпадений в гугл-таблице
         target_message = None
         for word in search_words:
             if word in STAR_MESSAGES:
                 target_message = STAR_MESSAGES[word]
                 logger.info(f"Найдено совпадение: {word} -> {target_message['message']}")
-                break  # Прекращаем проверку после первого найденного совпадения
+                break
 
-        # Закрепляем оригинальное сообщение в исходной группе
-        await update.message.pin()
-        last_pinned_times[chat_id] = current_time
-        last_user_username[chat_id] = user.username if user.username else None
-
-        # Сохраняем информацию о закрепленном сообщении
+        # ===== 1. Обработка в исходной группе =====
         try:
+            await message.pin()
+            last_pinned_times[chat_id] = current_time
+            last_user_username[chat_id] = user.username if user.username else None
+            logger.info(f"Сообщение закреплено в исходной группе {chat_id}")
+            
+            # Сохраняем информацию о закреплении
             save_pinned_message(chat_id, user.id, user.username, text, current_time)
         except Exception as e:
-            logger.error(f"Ошибка при сохранении информации о закрепленном сообщении в чате {chat_id}: {e}")
+            logger.error(f"Ошибка при закреплении в исходной группе: {e}")
+            return
 
         # Автопоздравление именинников
         await auto_birthdays(context, chat_id)
 
-        # Отправка сообщения в целевую группу
+        # ===== 2. Проверка таргет-группы перед пересылкой =====
         if chat_id != TARGET_GROUP_ID:
-            if target_message:
-                try:
-                    # Проверяем, что бот является участником целевой группы
-                    target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
-
-                    # Отправляем фото, если оно указано
+            try:
+                target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
+                target_pinned = target_chat.pinned_message
+                
+                # Проверяем активный закреп в таргет-группе
+                if target_pinned and (current_time - target_pinned.date.timestamp()) < PINNED_DURATION:
+                    logger.info(f"Пропуск пересылки - в таргет-группе активен закреп (осталось {PINNED_DURATION - (current_time - target_pinned.date.timestamp())} сек)")
+                    return
+                    
+                # ===== 3. Пересылка в таргет-группу =====
+                if target_message:
+                    # Отправка фото если есть
                     if target_message["photo"]:
                         await context.bot.send_photo(
                             chat_id=TARGET_GROUP_ID,
                             photo=target_message["photo"]
                         )
-
-                    # Отправляем текстовое сообщение
-                    forwarded_message = await context.bot.send_message(
+                        logger.info("Отправлено фото в таргет-группу")
+                    
+                    # Отправка и закреп текста
+                    forwarded = await context.bot.send_message(
                         chat_id=TARGET_GROUP_ID,
                         text=target_message["message"]
                     )
-                    await forwarded_message.pin()
-
-                    logger.info(f"Отправлено сообщение из гугл-таблицы в чате {TARGET_GROUP_ID}: {target_message['message']}")
-
-                except Exception as e:
-                    logger.error(f"Ошибка при пересылке сообщения из гугл-таблицы в чате {TARGET_GROUP_ID}: {e}")
-            else:
-                # Если совпадения нет, отправляем оригинальное сообщение
-                try:
+                    await forwarded.pin()
+                    logger.info(f"Закреплено в таргет-группе: {target_message['message']}")
+                    
+                else:
+                    # Отправка оригинального текста
                     new_text = text.replace("🌟 ", "").strip()
-                    forwarded_message = await context.bot.send_message(
+                    forwarded = await context.bot.send_message(
                         chat_id=TARGET_GROUP_ID,
                         text=new_text
                     )
-                    await forwarded_message.pin()
-                    logger.info(f"Отправлено оригинальное сообщение в чате {TARGET_GROUP_ID}: {new_text}")
-                except Exception as e:
-                    logger.error(f"Ошибка при пересылке оригинального сообщения в чате {TARGET_GROUP_ID}: {e}")
+                    await forwarded.pin()
+                    logger.info(f"Закреплено оригинальное сообщение в таргет-группе: {new_text}")
 
-        # Если сообщение пришло из целевой группы
-        elif chat_id == TARGET_GROUP_ID and target_message:
-            if target_message["photo"]:
-                # Отправляем только фото без текста
-                await context.bot.send_photo(
-                    chat_id=TARGET_GROUP_ID,
-                    photo=target_message["photo"]
-                )
+            except Exception as e:
+                logger.error(f"Ошибка при работе с таргет-группой: {e}")
 
-        # Отправка фото в исходную группу
+        # ===== 4. Отправка фото в исходную группу =====
         if target_message and target_message["photo"] and chat_id != TARGET_GROUP_ID:
             try:
-                # Отправляем фото в исходную группу без подписи
                 await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=target_message["photo"]
                 )
+                logger.info("Отправлено фото в исходную группу")
             except Exception as e:
-                logger.error(f"Ошибка при отправке фото в исходную группу {chat_id}: {e}")
+                logger.error(f"Ошибка при отправке фото в исходную группу: {e}")
 
-        # Устанавливаем задачу на автооткрепление через 45 минут
+        # ===== 5. Установка таймера открепления =====
         try:
             context.job_queue.run_once(unpin_all_messages, PINNED_DURATION, chat_id=chat_id)
-            logger.info(f"Установлена задача на открепление сообщений в чате {chat_id} через {PINNED_DURATION // 60} минут.")
+            logger.info(f"Установлен таймер открепления через {PINNED_DURATION//60} минут")
         except Exception as e:
-            logger.error(f"Ошибка при установке задачи на открепление сообщений в чате {chat_id}: {e}")
+            logger.error(f"Ошибка установки таймера: {e}")
 
     except Exception as e:
-        logger.error(f"Ошибка при обработке нового закрепленного сообщения в чате {chat_id}: {e}")
-
+        logger.error(f"Критическая ошибка в process_new_pinned_message: {e}")
 # удаление сист сообщ
 async def delete_system_message(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
