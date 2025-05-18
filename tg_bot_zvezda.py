@@ -229,7 +229,7 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # 2. Обработка в исходной группе
         try:
-            # Отправляем новое фото из 3 столбца таблицы (если есть)
+            # Отправляем фото из 3 столбца таблицы (если есть)
             if target_message and target_message.get("photo"):
                 await context.bot.send_photo(
                     chat_id=chat_id,
@@ -245,34 +245,20 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
             await message.pin(disable_notification=True)
             logger.info(f"Pinned in source chat {chat_id}")
             
-            # Сохраняем информацию о закреплении
-            save_pinned_message(chat_id, user.id, user.username, text, current_time)
         except Exception as e:
             logger.error(f"Source chat error: {e}")
-            return
 
         # 3. Обработка таргет-группы
         try:
-            # Получаем последние 2 сообщения от бота в таргет-группе
-            last_messages = []
-            try:
-                updates = await context.bot.get_updates(offset=-10, timeout=5)
-                for update_msg in updates:
-                    if (update_msg.message and 
-                        update_msg.message.chat.id == TARGET_GROUP_ID and 
-                        update_msg.message.from_user.id == context.bot.id):
-                        last_messages.append(update_msg.message)
-                        if len(last_messages) >= 2:
-                            break
-            except Exception as e:
-                logger.error(f"Error getting updates: {e}")
-
-            # Удаляем найденные сообщения
-            for msg in last_messages[:2]:  # Берем максимум 2 сообщения
+            # Получаем текущее закрепленное сообщение
+            target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
+            
+            # Удаляем предыдущее закрепленное сообщение
+            if target_chat.pinned_message:
                 try:
-                    await context.bot.delete_message(TARGET_GROUP_ID, msg.message_id)
+                    await context.bot.delete_message(TARGET_GROUP_ID, target_chat.pinned_message.message_id)
                 except Exception as e:
-                    logger.error(f"Error deleting message: {e}")
+                    logger.error(f"Error deleting pinned message: {e}")
 
             # Отправляем новое фото если есть
             if target_message and target_message.get("photo"):
