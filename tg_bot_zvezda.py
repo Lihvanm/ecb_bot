@@ -235,7 +235,7 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
                 await context.bot.unpin_chat_message(chat_id, chat.pinned_message.message_id)
                 # Удаляем старое сообщение автора
                 try:
-                    await chat.pinned_message.delete()
+                    await context.bot.delete_message(chat_id, chat.pinned_message.message_id)
                 except Exception as e:
                     logger.error(f"Error deleting old pinned message: {e}")
             
@@ -251,16 +251,34 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # 3. Обработка таргет-группы
         try:
+            # Получаем текущее закрепленное сообщение в таргет-группе
             target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
+            if target_chat.pinned_message:
+                # Удаляем закрепленное сообщение
+                try:
+                    await context.bot.delete_message(TARGET_GROUP_ID, target_chat.pinned_message.message_id)
+                except Exception as e:
+                    logger.error(f"Error deleting pinned message in target group: {e}")
             
-            # Удаляем ВСЕ предыдущие сообщения бота в таргет-группе
-            async for old_message in context.bot.get_chat_history(TARGET_GROUP_ID, limit=2):
-                if old_message.from_user and old_message.from_user.id == context.bot.id:
+            # Удаляем последнее сообщение от бота (не закрепленное)
+            try:
+                # Получаем последние 2 сообщения в чате
+                messages = []
+                async for msg in context.bot.get_updates():
+                    if msg.message and msg.message.chat.id == TARGET_GROUP_ID and msg.message.from_user.id == context.bot.id:
+                        messages.append(msg.message)
+                        if len(messages) >= 2:
+                            break
+                
+                # Удаляем найденные сообщения
+                for msg in messages:
                     try:
-                        await old_message.delete()
+                        await context.bot.delete_message(TARGET_GROUP_ID, msg.message_id)
                     except Exception as e:
-                        logger.error(f"Error deleting old bot message in target group: {e}")
-            
+                        logger.error(f"Error deleting bot message in target group: {e}")
+            except Exception as e:
+                logger.error(f"Error getting chat history: {e}")
+
             # Отправляем новое фото если есть
             if target_message and target_message.get("photo"):
                 await context.bot.send_photo(
