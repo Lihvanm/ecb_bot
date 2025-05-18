@@ -229,34 +229,15 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # 2. Обработка в исходной группе
         try:
-            # Удаляем предыдущее фото и уведомление о закрепе в этой группе
-            chat = await context.bot.get_chat(chat_id)
-            
-            # Удаляем старое фото (если было сохранено)
-            if 'last_photo_msg_id' in context.chat_data:
-                try:
-                    await context.bot.delete_message(chat_id, context.chat_data['last_photo_msg_id'])
-                except Exception as e:
-                    logger.error(f"Error deleting old photo: {e}")
-
-            # Удаляем уведомление о закрепе (последнее сообщение от бота)
-            try:
-                async for msg in context.bot.get_chat_history(chat_id, limit=5):
-                    if msg.from_user and msg.from_user.id == context.bot.id and msg.message_id != message.message_id:
-                        await msg.delete()
-                        break
-            except Exception as e:
-                logger.error(f"Error deleting pin notification: {e}")
-
             # Отправляем новое фото из 3 столбца таблицы (если есть)
             if target_message and target_message.get("photo"):
-                photo_msg = await context.bot.send_photo(
+                await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=target_message["photo"]
                 )
-                context.chat_data['last_photo_msg_id'] = photo_msg.message_id
             
             # Открепляем старое сообщение того же автора
+            chat = await context.bot.get_chat(chat_id)
             if chat.pinned_message and chat.pinned_message.from_user.id == user.id:
                 await context.bot.unpin_chat_message(chat_id, chat.pinned_message.message_id)
             
@@ -272,23 +253,26 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
         # 3. Обработка таргет-группы
         try:
-            # Получаем текущее закрепленное сообщение в таргет-группе
-            target_chat = await context.bot.get_chat(TARGET_GROUP_ID)
-            
-            # Удаляем ВСЕ сообщения от бота в таргет-группе
+            # Получаем последние 2 сообщения от бота в таргет-группе
+            last_messages = []
             try:
-                # 1. Открепляем все сообщения
-                await context.bot.unpin_all_chat_messages(TARGET_GROUP_ID)
-                
-                # 2. Удаляем последние 5 сообщений от бота
-                async for msg in context.bot.get_chat_history(TARGET_GROUP_ID, limit=5):
-                    if msg.from_user and msg.from_user.id == context.bot.id:
-                        try:
-                            await msg.delete()
-                        except Exception as e:
-                            logger.error(f"Error deleting message: {e}")
+                updates = await context.bot.get_updates(offset=-10, timeout=5)
+                for update_msg in updates:
+                    if (update_msg.message and 
+                        update_msg.message.chat.id == TARGET_GROUP_ID and 
+                        update_msg.message.from_user.id == context.bot.id):
+                        last_messages.append(update_msg.message)
+                        if len(last_messages) >= 2:
+                            break
             except Exception as e:
-                logger.error(f"Error cleaning target group: {e}")
+                logger.error(f"Error getting updates: {e}")
+
+            # Удаляем найденные сообщения
+            for msg in last_messages[:2]:  # Берем максимум 2 сообщения
+                try:
+                    await context.bot.delete_message(TARGET_GROUP_ID, msg.message_id)
+                except Exception as e:
+                    logger.error(f"Error deleting message: {e}")
 
             # Отправляем новое фото если есть
             if target_message and target_message.get("photo"):
@@ -314,7 +298,7 @@ async def process_new_pinned_message(update: Update, context: ContextTypes.DEFAU
 
     except Exception as e:
         logger.error(f"Critical error in process_new_pinned_message: {e}")
-
+        
 
 async def process_target_group(context, chat_id, user, target_message, text):
     """Отдельная обработка для таргет-группы"""
